@@ -59,155 +59,99 @@ private:
     bool nextBlockReady = false;
 };
 
-// Read-only: draws the post-EQ spectrum plus each active band's frequency-response curve.
-// No interaction yet (that's Phase 5).
+// Spectrum + band curves with direct interaction (Phase 5): create, drag, Q, delete, multi-select.
 class SpectrumAnalyzerComponent : public juce::Component, private juce::Timer
 {
 public:
     SpectrumAnalyzerComponent(juce::AudioProcessorValueTreeState& stateToRead,
                                AnalyzerDataProvider& analyzerToRead,
-                               double& sampleRateToRead)
-        : apvts(stateToRead), analyzer(analyzerToRead), sampleRate(sampleRateToRead)
-    {
-        startTimerHz(30);
-    }
+                               double& sampleRateToRead);
+    ~SpectrumAnalyzerComponent() override;
 
-    ~SpectrumAnalyzerComponent() override { stopTimer(); }
-
-    void paint(juce::Graphics& g) override
-    {
-        auto bounds = getLocalBounds().toFloat();
-        g.fillAll(juce::Colour(0xff1a1a1e));
-
-        drawGrid(g, bounds);
-        drawSpectrum(g, bounds);
-        drawBandCurves(g, bounds);
-    }
+    void paint(juce::Graphics& g) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 
 private:
-    void timerCallback() override
+    enum class Gesture
     {
-        if (analyzer.getMagnitudesDb(latestMagnitudesDb))
-            repaint();
-    }
+        none,
+        dragBand,
+        createDrag,
+        marquee
+    };
 
-    static float freqToX(float freq, float width)
-    {
-        constexpr float minFreq = 20.0f, maxFreq = 20000.0f;
-        const auto norm = std::log(freq / minFreq) / std::log(maxFreq / minFreq);
-        return norm * width;
-    }
+    void timerCallback() override;
 
-    static float dbToY(float db, float height, float minDb, float maxDb)
-    {
-        const auto norm = (db - minDb) / (maxDb - minDb);
-        return height * (1.0f - juce::jlimit(0.0f, 1.0f, norm));
-    }
+    static float freqToX(float freq, float width);
+    static float xToFreq(float x, float width);
+    static float dbToY(float db, float height, float minDb, float maxDb);
+    static float yToDb(float y, float height, float minDb, float maxDb);
 
-    void drawGrid(juce::Graphics& g, juce::Rectangle<float> bounds)
-    {
-        g.setColour(juce::Colours::white.withAlpha(0.15f));
+    void drawGrid(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void drawSpectrum(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void drawBandCurves(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void drawBandHandles(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void drawCreatePreview(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void drawMarquee(juce::Graphics& g);
+    void drawResponsePath(juce::Graphics& g, juce::Rectangle<float> bounds,
+                          Params::FilterType type, float freq, float gain, float q,
+                          juce::Colour colour, float strokeWidth);
 
-        for (float freq : { 100.0f, 1000.0f, 10000.0f })
-        {
-            auto x = freqToX(freq, bounds.getWidth());
-            g.drawVerticalLine((int) x, bounds.getY(), bounds.getBottom());
-        }
+    juce::Point<float> handlePosition(int bandIndex, juce::Rectangle<float> bounds) const;
+    int hitTestBand(juce::Point<float> pos, juce::Rectangle<float> bounds) const;
+    int findFirstDisabledBand() const;
+    static Params::FilterType defaultTypeForFrequency(float freqHz);
 
-        for (float db : { 0.0f, -30.0f, -60.0f, -90.0f })
-        {
-            auto y = dbToY(db, bounds.getHeight(), minDb, maxDb);
-            g.drawHorizontalLine((int) y, bounds.getX(), bounds.getRight());
-        }
-    }
+    void setBandEnabled(int bandIndex, bool enabled);
+    void setBandType(int bandIndex, Params::FilterType type);
+    void setBandFreq(int bandIndex, float freqHz);
+    void setBandGain(int bandIndex, float gainDb);
+    void setBandQ(int bandIndex, float q);
+    void beginBandGesture(int bandIndex);
+    void beginBandGesture(int bandIndex, std::initializer_list<const char*> suffixes);
+    void endBandGesture(int bandIndex);
+    void endBandGesture(int bandIndex, std::initializer_list<const char*> suffixes);
 
-    void drawSpectrum(juce::Graphics& g, juce::Rectangle<float> bounds)
-    {
-        if (sampleRate <= 0.0)
-            return;
-
-        juce::Path path;
-        const auto width = bounds.getWidth();
-        const auto height = bounds.getHeight();
-        bool started = false;
-
-        for (int x = 0; x < (int) width; ++x)
-        {
-            const auto norm = (float) x / width;
-            const auto freq = 20.0f * std::pow(1000.0f, norm); // 20Hz .. 20kHz over the width
-            const auto bin = juce::jlimit(1, AnalyzerDataProvider::fftSize / 2 - 1,
-                                           (int) (freq * AnalyzerDataProvider::fftSize / sampleRate));
-            const auto db = latestMagnitudesDb[(size_t) bin];
-            const auto y = dbToY(db, height, minDb, maxDb);
-
-            if (!started)
-            {
-                path.startNewSubPath(bounds.getX() + x, bounds.getY() + y);
-                started = true;
-            }
-            else
-            {
-                path.lineTo(bounds.getX() + x, bounds.getY() + y);
-            }
-        }
-
-        g.setColour(juce::Colours::white.withAlpha(0.6f));
-        g.strokePath(path, juce::PathStrokeType(1.0f));
-    }
-
-    void drawBandCurves(juce::Graphics& g, juce::Rectangle<float> bounds)
-    {
-        if (sampleRate <= 0.0)
-            return;
-
-        for (int i = 0; i < Params::numBands; ++i)
-        {
-            auto* enabledParam = apvts.getRawParameterValue(Params::bandParamID(i, "enabled"));
-            if (enabledParam->load() < 0.5f)
-                continue;
-
-            auto type = static_cast<Params::FilterType>(
-                (int) apvts.getRawParameterValue(Params::bandParamID(i, "type"))->load());
-            auto freq = apvts.getRawParameterValue(Params::bandParamID(i, "freq"))->load();
-            auto gain = apvts.getRawParameterValue(Params::bandParamID(i, "gain"))->load();
-            auto q = apvts.getRawParameterValue(Params::bandParamID(i, "q"))->load();
-
-            auto coeffs = FilterBand::computeCoefficients(type, sampleRate, freq, gain, q);
-
-            juce::Path path;
-            const auto width = bounds.getWidth();
-            const auto height = bounds.getHeight();
-            bool started = false;
-
-            for (int x = 0; x < (int) width; ++x)
-            {
-                const auto norm = (float) x / width;
-                const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
-                const auto magnitude = coeffs->getMagnitudeForFrequency(probeFreq, sampleRate);
-                const auto db = juce::Decibels::gainToDecibels((float) magnitude, -100.0f);
-                const auto y = dbToY(db, height, minDb, maxDb);
-
-                if (!started)
-                {
-                    path.startNewSubPath(bounds.getX() + x, bounds.getY() + y);
-                    started = true;
-                }
-                else
-                {
-                    path.lineTo(bounds.getX() + x, bounds.getY() + y);
-                }
-            }
-
-            g.setColour(juce::Colour(0xffe0a030).withAlpha(0.85f));
-            g.strokePath(path, juce::PathStrokeType(1.5f));
-        }
-    }
+    void selectOnly(int bandIndex);
+    void toggleSelection(int bandIndex);
+    void clearSelection();
+    bool isSelected(int bandIndex) const;
+    void selectBandsInMarquee(juce::Rectangle<float> bounds);
+    void commitCreateAt(float freqHz, float gainDb);
+    void deleteBand(int bandIndex);
 
     juce::AudioProcessorValueTreeState& apvts;
     AnalyzerDataProvider& analyzer;
     double& sampleRate;
     std::array<float, AnalyzerDataProvider::fftSize / 2> latestMagnitudesDb {};
 
-    static constexpr float minDb = -90.0f;
-    static constexpr float maxDb = 6.0f;
+    juce::SparseSet<int> selectedBands;
+    Gesture gesture = Gesture::none;
+    int primaryBand = -1;
+    juce::Point<float> gestureStartPos;
+    juce::Point<float> gestureCurrentPos;
+    float dragStartFreq = 1000.0f;
+    float dragStartGain = 0.0f;
+    std::array<float, Params::numBands> dragStartFreqs {};
+    std::array<float, Params::numBands> dragStartGains {};
+    bool createPreviewActive = false;
+    float createPreviewFreq = 1000.0f;
+    float createPreviewGain = 0.0f;
+    Params::FilterType createPreviewType = Params::FilterType::bell;
+
+    // Spectrum uses a wide absolute-level range; band curves/handles use ±gain range
+    // so click-to-set-gain lands in a usable part of the display.
+    static constexpr float spectrumMinDb = -90.0f;
+    static constexpr float spectrumMaxDb = 6.0f;
+    static constexpr float curveMinDb = -24.0f;
+    static constexpr float curveMaxDb = 24.0f;
+    static constexpr float handleHitRadiusPx = 14.0f;
+    static constexpr float createDragThresholdPx = 4.0f;
+    static constexpr float lowZoneMaxHz = 250.0f;
+    static constexpr float highZoneMinHz = 5000.0f;
+    static constexpr float defaultQ = 0.707f;
 };

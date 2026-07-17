@@ -19,6 +19,7 @@ target_sources(PlaymakersEQ
         PluginProcessor.cpp
         PluginEditor.cpp
         Params.cpp
+        SpectrumAnalyzer.cpp
 )
 
 target_compile_definitions(PlaymakersEQ

@@ -8,7 +8,7 @@ cmake --build build --config Debug --target PlaymakersEQ_AU --target PlaymakersE
 Installs to `~/Library/Audio/Plug-Ins/{Components,VST3}/`. Verify AU with
 `auval -v aufx Peq1 Plmk`. DSP correctness test: build+run the `DspSmokeTest` target.
 
-## 1. What's built (Phases 1–4, all committed)
+## 1. What's built (Phases 1–5)
 
 - **Phase 1** — JUCE 8.0.14 pulled via CMake `FetchContent`. Plugin shell (`Source/PluginProcessor.*`,
   `PluginEditor.*`) builds AU + VST3, loads silently, zero parameters. `auval` clean.
@@ -21,28 +21,36 @@ Installs to `~/Library/Audio/Plug-Ins/{Components,VST3}/`. Verify AU with
 - **Phase 3** — added `stereoMode` (6-value enum: L/R, Left-only, Right-only, M/S, Mid-only, Side-only)
   and `balance` (-1..1) per band. Routing lives in `PluginProcessor::processStereoBand()`. One
   crossfade implementation serves both L/R and M/S domains — see decisions below.
-- **Phase 4** — `Source/SpectrumAnalyzer.h`: `AnalyzerDataProvider` (2048-pt FFT, Hann window, fed a
+- **Phase 4** — `Source/SpectrumAnalyzer.h/.cpp`: `AnalyzerDataProvider` (2048-pt FFT, Hann window, fed a
   post-EQ mono mixdown from `processBlock`) + `SpectrumAnalyzerComponent` (30fps repaint, draws grid,
   live spectrum, and per-band response curves). Curves are computed with the same
   `FilterBand::computeCoefficients()` the audio thread uses, so UI and DSP can't drift apart.
+- **Phase 5** — direct spectrum interaction on `SpectrumAnalyzerComponent`:
+  - **Double-click** → first disabled band slot enabled at click freq/gain; default type by zone
+  - **Click-drag** on empty space → live create preview, commits on mouse-up
+  - **Handle drag** → freq+gain (Cmd/Ctrl = fine-tune); multi-selected bands move together
+  - **Scroll wheel** → Q (Shift = finer); applies to hovered or selected band(s)
+  - **Alt/Option-click** → disable (delete) band
+  - **Shift-click** toggle select; **Shift-drag** marquee multi-select
+  - Selected curves/handles highlighted; others recede
+  - Zone defaults: <250 Hz → Low Shelf, >5 kHz → High Shelf, else Bell (hardcoded; settings later)
 
-All 4 phases: clean build, `auval` pass, committed individually.
+Phases 1–4: clean build, `auval` pass, committed individually. Phase 5: clean build, `auval` pass,
+`DspSmokeTest` pass — **not yet committed** at handoff time.
 
 ## 2. In progress / partial / untested
 
-- **Nothing mid-edit** — working tree was clean at handoff time, Phase 4 was the last completed commit.
-- **Phase 5 (direct spectrum interaction) has not been started at all.** No mouse handling exists yet
-  in `SpectrumAnalyzerComponent` — it's currently `Component` + `Timer`, read-only, no `mouseDown`/
-  `mouseDrag`/etc.
+- **Nothing mid-edit** — Phase 5 interaction is implemented and verified via build/`auval`/`DspSmokeTest`.
 - **Only mono-summed post-EQ is analyzed** — no pre-EQ or external-sidechain analyzer path exists yet,
   even though the full spec (Metering & analyzer section) calls for pre/post/external toggle. This was
-  a deliberate scope cut for Phase 4 (see decisions below), not an oversight, but it's incomplete
-  relative to the full spec.
-- **No automated test covers stereo/MS routing (Phase 3) or the analyzer (Phase 4).** Only the DSP
-  filter math (Phase 2) has a regression test (`Tests/DspSmokeTest.cpp`). If you touch
-  `processStereoBand` or `AnalyzerDataProvider`, there's no safety net — verify manually or add tests.
-- **No UI beyond the analyzer view.** No band list, no knobs, no theme — `PluginEditor` just hosts the
-  analyzer component full-window.
+  a deliberate scope cut for Phase 4, not an oversight, but it's incomplete relative to the full spec.
+- **No automated test covers stereo/MS routing (Phase 3), the analyzer (Phase 4), or spectrum
+  interaction (Phase 5).** Only the DSP filter math (Phase 2) has a regression test
+  (`Tests/DspSmokeTest.cpp`). Manual host testing is the safety net for UI gestures.
+- **No UI beyond the interactive analyzer.** No band list, no knobs, no theme — `PluginEditor` just
+  hosts the analyzer component full-window.
+- **Host load still unverified in a real DAW** (Logic / GarageBand / FL Studio) — only `auval` + DSP
+  smoke test. Phase 5 gestures especially need a quick eyeball in an actual host editor window.
 
 ## 3. Decisions made that weren't explicit in the spec
 
@@ -72,6 +80,16 @@ All 4 phases: clean build, `auval` pass, committed individually.
   verification that Phase 2's biquad coefficients were actually correct (not just that code compiled).
   Links `juce_dsp` + `juce_audio_processors` directly against `FilterBand.h`/`Params.cpp`, bypassing the
   plugin-client macros — reuse this pattern if you add more DSP-only tests.
+- **Band curves / handles use a ±24 dB vertical scale** (0 dB at display centre), while the live FFT
+  spectrum keeps its wide absolute-level range (−90…+6 dB). Phase 4 had drawn both on the spectrum
+  scale, which crushed usable gain-edit space into the top ~30% of the view; Phase 5 split the scales
+  so click-to-set-gain is usable. Spectrum and EQ curve no longer share a common dB axis — intentional,
+  and matches how most modern EQs present absolute spectrum vs. relative gain.
+- **Frequency-zone boundaries hardcoded** (250 Hz / 5 kHz) until a settings UI exists. Spec calls them
+  user-configurable; don't invent a settings system early — just keep the constants named and local
+  (`lowZoneMaxHz` / `highZoneMinHz` in `SpectrumAnalyzerComponent`).
+- **SpectrumAnalyzer implementation moved to `.cpp`** in Phase 5 (was header-only in Phase 4) — mouse
+  interaction made the component too large for a header. `AnalyzerDataProvider` stays in the header.
 
 ## 4. Known issues / TODOs
 
@@ -79,26 +97,23 @@ All 4 phases: clean build, `auval` pass, committed individually.
   change-detection, no smoothing) — fine for now (correctness-first per the spec), but will need
   smoothing before Phase 10's "click-free parameter transitions on automation" requirement. Flagging
   now so it isn't forgotten.
-- `SpectrumAnalyzerComponent` grid has only 3 vertical (100Hz/1kHz/10kHz) and 4 horizontal (0/-30/-60/
-  -90dB) lines, no text labels — intentionally minimal for Phase 4's "basic" scope, will likely want
-  labels once the UI is otherwise more built out.
+- `SpectrumAnalyzerComponent` grid has no text labels (freq/dB) — intentionally minimal, will likely
+  want labels once the UI is otherwise more built out. Horizontal lines now mark ±12 / 0 dB on the
+  *curve* scale (not the old spectrum −30/−60/−90 lines).
 - No `.claude/settings.json` committed (only `.local.json`, gitignored) — if Cursor's agent needs
   permission scaffolding it'll start fresh; nothing to port over there.
 - CMake `Debug` config only has been exercised — never built/tested `Release`.
 - Only tested on this machine (macOS, arm64, Xcode 26.2 SDK). Never verified in an actual DAW (FL
   Studio / Logic / GarageBand) — only `auval` and the standalone DSP test. Loading it in a real host is
-  still an open verification step.
+  still an open verification step (especially Phase 5 gestures).
 
 ## 5. Next concrete steps
 
-1. **Load the plugin in an actual host** (Logic/GarageBand for AU, or any VST3 host) and eyeball the
-   spectrum analyzer + confirm a band curve appears when you flip `enabled` via the host's generic
-   parameter UI (there's no custom UI to toggle it yet, so use the host's built-in parameter list).
-2. **Start Phase 5** (direct spectrum interaction) in `SpectrumAnalyzerComponent`:
-   - double-click → find first disabled band slot, set its freq/gain from click position, flip `enabled`
-   - drag-create, curve-grab (freq+gain), modifier/scroll for Q, modifier-click to delete
-   - default filter type by frequency zone (low/mid/high → shelf/HP vs bell vs shelf/LP)
-   - selection state + multi-select (marquee/shift-click) for later batch-edit
-3. Once Phase 5 has real interaction, revisit whether the single `balance` param design (decision #3
-   above) still feels right once there's a UI control surface for it — may want to split before too much
-   UI is built on top of the current shape.
+1. **Commit Phase 5** if desired (`SpectrumAnalyzer.h/.cpp`, `Source/CMakeLists.txt`, this handoff).
+2. **Load the plugin in an actual host** and exercise Phase 5 gestures: double-click create, drag-create
+   with preview, handle drag, scroll-Q, Alt-delete, shift/marquee multi-select.
+3. **Start Phase 6** (remaining filter types + continuous slope + brickwall mode) in `FilterBand` /
+   `Params` — Notch, Band Pass, All Pass, Tilt Shelf, Flat Tilt are still identity no-ops; slope /
+   brickwall params don't exist yet.
+4. Once there's a control surface for stereo balance, revisit whether the single `balance` param
+   design (decision above) still feels right — may want to split before too much UI is built on it.
