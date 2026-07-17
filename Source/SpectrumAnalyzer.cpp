@@ -2,8 +2,9 @@
 
 SpectrumAnalyzerComponent::SpectrumAnalyzerComponent(juce::AudioProcessorValueTreeState& stateToRead,
                                                        AnalyzerDataProvider& analyzerToRead,
-                                                       double& sampleRateToRead)
-    : apvts(stateToRead), analyzer(analyzerToRead), sampleRate(sampleRateToRead)
+                                                       double& sampleRateToRead,
+                                                       const Theme& themeToUse)
+    : apvts(stateToRead), analyzer(analyzerToRead), sampleRate(sampleRateToRead), theme(themeToUse)
 {
     startTimerHz(30);
 }
@@ -48,7 +49,7 @@ float SpectrumAnalyzerComponent::yToDb(float y, float height, float minDb, float
 void SpectrumAnalyzerComponent::paint(juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
-    g.fillAll(juce::Colour(0xff1a1a1e));
+    g.fillAll(theme.background);
 
     drawGrid(g, bounds);
     drawSpectrum(g, bounds);
@@ -60,7 +61,7 @@ void SpectrumAnalyzerComponent::paint(juce::Graphics& g)
 
 void SpectrumAnalyzerComponent::drawGrid(juce::Graphics& g, juce::Rectangle<float> bounds)
 {
-    g.setColour(juce::Colours::white.withAlpha(0.15f));
+    g.setColour(theme.grid);
 
     for (float freq : { 100.0f, 1000.0f, 10000.0f })
     {
@@ -106,18 +107,16 @@ void SpectrumAnalyzerComponent::drawSpectrum(juce::Graphics& g, juce::Rectangle<
         }
     }
 
-    g.setColour(juce::Colours::white.withAlpha(0.45f));
+    g.setColour(theme.spectrum);
     g.strokePath(path, juce::PathStrokeType(1.0f));
 }
 
 void SpectrumAnalyzerComponent::drawResponsePath(juce::Graphics& g, juce::Rectangle<float> bounds,
-                                                  Params::FilterType type, float freq, float gain, float q,
+                                                  const FilterBand::StageSet& stages,
                                                   juce::Colour colour, float strokeWidth)
 {
     if (sampleRate <= 0.0)
         return;
-
-    auto coeffs = FilterBand::computeCoefficients(type, sampleRate, freq, gain, q);
 
     juce::Path path;
     const auto width = bounds.getWidth();
@@ -128,7 +127,7 @@ void SpectrumAnalyzerComponent::drawResponsePath(juce::Graphics& g, juce::Rectan
     {
         const auto norm = (float) x / width;
         const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
-        const auto magnitude = coeffs->getMagnitudeForFrequency(probeFreq, sampleRate);
+        const auto magnitude = FilterBand::getMagnitudeForFrequency(stages, probeFreq, sampleRate);
         const auto db = juce::Decibels::gainToDecibels((float) magnitude, -100.0f);
         const auto y = dbToY(db, height, curveMinDb, curveMaxDb);
 
@@ -149,6 +148,9 @@ void SpectrumAnalyzerComponent::drawResponsePath(juce::Graphics& g, juce::Rectan
 
 void SpectrumAnalyzerComponent::drawBandCurves(juce::Graphics& g, juce::Rectangle<float> bounds)
 {
+    if (sampleRate <= 0.0)
+        return;
+
     for (int i = 0; i < Params::numBands; ++i)
     {
         if (apvts.getRawParameterValue(Params::bandParamID(i, "enabled"))->load() < 0.5f)
@@ -159,13 +161,16 @@ void SpectrumAnalyzerComponent::drawBandCurves(juce::Graphics& g, juce::Rectangl
         auto freq = apvts.getRawParameterValue(Params::bandParamID(i, "freq"))->load();
         auto gain = apvts.getRawParameterValue(Params::bandParamID(i, "gain"))->load();
         auto q = apvts.getRawParameterValue(Params::bandParamID(i, "q"))->load();
+        auto slope = apvts.getRawParameterValue(Params::bandParamID(i, "slope"))->load();
+        auto brickwall = apvts.getRawParameterValue(Params::bandParamID(i, "brickwall"))->load() >= 0.5f;
 
         const bool selected = isSelected(i);
-        const auto colour = selected ? juce::Colour(0xffffc060)
-                                     : juce::Colour(0xffe0a030).withAlpha(selectedBands.isEmpty() ? 0.85f : 0.35f);
+        const auto colour = selected ? theme.curveSelected
+                                     : theme.curve.withAlpha(selectedBands.isEmpty() ? 0.85f : 0.35f);
         const float stroke = selected ? 2.2f : 1.4f;
 
-        drawResponsePath(g, bounds, type, freq, gain, q, colour, stroke);
+        const auto stages = FilterBand::computeStages(type, sampleRate, freq, gain, q, slope, brickwall);
+        drawResponsePath(g, bounds, stages, colour, stroke);
     }
 }
 
@@ -178,27 +183,28 @@ void SpectrumAnalyzerComponent::drawBandHandles(juce::Graphics& g, juce::Rectang
 
         const auto pos = handlePosition(i, bounds);
         const bool selected = isSelected(i);
-        const auto fill = selected ? juce::Colour(0xffffc060) : juce::Colour(0xffe0a030);
+        const auto fill = selected ? theme.handleSelected : theme.handle;
         const float radius = selected ? 5.5f : 4.0f;
 
         g.setColour(fill.withAlpha(0.95f));
         g.fillEllipse(pos.x - radius, pos.y - radius, radius * 2.0f, radius * 2.0f);
-        g.setColour(juce::Colours::black.withAlpha(0.55f));
+        g.setColour(theme.background.contrasting(0.6f).withAlpha(0.55f));
         g.drawEllipse(pos.x - radius, pos.y - radius, radius * 2.0f, radius * 2.0f, 1.0f);
     }
 }
 
 void SpectrumAnalyzerComponent::drawCreatePreview(juce::Graphics& g, juce::Rectangle<float> bounds)
 {
-    if (!createPreviewActive)
+    if (!createPreviewActive || sampleRate <= 0.0)
         return;
 
-    drawResponsePath(g, bounds, createPreviewType, createPreviewFreq, createPreviewGain, defaultQ,
-                     juce::Colour(0xff80c0ff).withAlpha(0.9f), 1.8f);
+    const auto stages = FilterBand::computeStages(createPreviewType, sampleRate,
+                                                   createPreviewFreq, createPreviewGain, defaultQ);
+    drawResponsePath(g, bounds, stages, theme.preview.withAlpha(0.9f), 1.8f);
 
     const auto x = bounds.getX() + freqToX(createPreviewFreq, bounds.getWidth());
     const auto y = bounds.getY() + dbToY(createPreviewGain, bounds.getHeight(), curveMinDb, curveMaxDb);
-    g.setColour(juce::Colour(0xff80c0ff));
+    g.setColour(theme.preview);
     g.fillEllipse(x - 4.5f, y - 4.5f, 9.0f, 9.0f);
 }
 
@@ -208,9 +214,9 @@ void SpectrumAnalyzerComponent::drawMarquee(juce::Graphics& g)
         return;
 
     auto rect = juce::Rectangle<float>(gestureStartPos, gestureCurrentPos);
-    g.setColour(juce::Colours::white.withAlpha(0.15f));
+    g.setColour(theme.text.withAlpha(0.15f));
     g.fillRect(rect);
-    g.setColour(juce::Colours::white.withAlpha(0.7f));
+    g.setColour(theme.text.withAlpha(0.7f));
     g.drawRect(rect, 1.0f);
 }
 

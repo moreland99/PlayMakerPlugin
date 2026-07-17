@@ -4,9 +4,11 @@
 #include <juce_dsp/juce_dsp.h>
 #include "Params.h"
 #include "FilterBand.h"
+#include "DynamicBand.h"
+#include "LinearPhaseEQ.h"
 #include "SpectrumAnalyzer.h"
 
-class PlaymakersEQAudioProcessor : public juce::AudioProcessor
+class PlaymakersEQAudioProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
     PlaymakersEQAudioProcessor();
@@ -36,22 +38,48 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
+    // Declared before apvts: the tree state keeps a pointer to it for undoable edits.
+    juce::UndoManager undoManager;
     juce::AudioProcessorValueTreeState apvts;
 
     AnalyzerDataProvider& getPostAnalyzer() { return postAnalyzer; }
     double& getSampleRateRef() { return currentSampleRate; }
 
+    // A/B comparison — message thread only.
+    void toggleAB();
+    void copyCurrentToOtherSlot();
+    bool isOnSlotA() const { return onSlotA; }
+
 private:
-    void updateBandCoefficients(int bandIndex);
+    void timerCallback() override;
+    juce::uint64 computeParamsHash() const;
+    void rebuildLinearPhase(Params::PhaseMode mode);
+    int firTapsForMode(Params::PhaseMode mode, int quality) const;
+    bool bandUsesFIR(int bandIndex) const;
+    void updateBandCoefficients(int bandIndex, float dynGainOffsetDb, int numSamplesForSmoothing);
     void processStereoBand(int bandIndex, float* leftData, float* rightData, int numSamples);
+
+    struct BandSmoothers
+    {
+        juce::SmoothedValue<float> freq, gain, q;
+    };
 
     std::array<FilterBand, Params::numBands> bands;
     std::array<Params::BandParamPointers, Params::numBands> paramPointers;
+    std::array<BandSmoothers, Params::numBands> smoothers;
+    std::array<DynamicBandDetector, Params::numBands> dynDetectors;
+    Params::GlobalParamPointers globalPointers;
+
+    LinearPhaseEQ linearEQ;
+    juce::uint64 lastFirParamsHash = 0;
 
     juce::AudioBuffer<float> scratchPreL, scratchPreR, scratchA, scratchB;
     AnalyzerDataProvider postAnalyzer;
     double currentSampleRate = 0.0;
-    std::vector<float> monoScratch;
+    std::vector<float> monoScratch, preMonoScratch, scMonoScratch, detectorScratch;
+
+    juce::ValueTree slotA, slotB;
+    bool onSlotA = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PlaymakersEQAudioProcessor)
 };

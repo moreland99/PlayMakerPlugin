@@ -53,6 +53,40 @@ inline const juce::StringArray& stereoModeNames()
     return names;
 }
 
+// Order fixed for the plugin's lifetime, same reasoning as FilterType.
+enum class PhaseMode
+{
+    zeroLatency = 0,
+    lowLatencyCorrected,
+    linearPhase,
+    numPhaseModes
+};
+
+inline const juce::StringArray& phaseModeNames()
+{
+    static const juce::StringArray names { "Zero Latency", "Low-Latency Phase-Corrected", "Linear Phase" };
+    return names;
+}
+
+inline const juce::StringArray& linearQualityNames()
+{
+    static const juce::StringArray names { "Low", "Medium", "High" };
+    return names;
+}
+
+// Only these filter types have a gain parameter that dynamics can modulate.
+inline bool typeSupportsDynamics(FilterType t)
+{
+    return t == FilterType::bell || t == FilterType::lowShelf || t == FilterType::highShelf
+        || t == FilterType::tiltShelf || t == FilterType::flatTilt;
+}
+
+// Slope (cascaded stages) only applies to the cut filters.
+inline bool typeSupportsSlope(FilterType t)
+{
+    return t == FilterType::lowCut || t == FilterType::highCut;
+}
+
 inline juce::String bandParamID(int bandIndex, const juce::String& suffix)
 {
     return "band" + juce::String(bandIndex) + "_" + suffix;
@@ -67,6 +101,22 @@ struct BandParamPointers
     std::atomic<float>* q = nullptr;
     std::atomic<float>* stereoMode = nullptr;
     std::atomic<float>* balance = nullptr;
+    std::atomic<float>* slope = nullptr;
+    std::atomic<float>* brickwall = nullptr;
+    std::atomic<float>* dynEnabled = nullptr;
+    std::atomic<float>* dynThreshold = nullptr;
+    std::atomic<float>* dynRange = nullptr;
+    std::atomic<float>* dynRatio = nullptr;
+    std::atomic<float>* dynAttack = nullptr;
+    std::atomic<float>* dynRelease = nullptr;
+    std::atomic<float>* dynRelativeBlend = nullptr;
+    std::atomic<float>* dynSidechainBlend = nullptr;
+};
+
+struct GlobalParamPointers
+{
+    std::atomic<float>* phaseMode = nullptr;
+    std::atomic<float>* linearQuality = nullptr;
 };
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();

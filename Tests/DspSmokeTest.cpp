@@ -35,8 +35,9 @@ int main()
     const int blockSize = 8192;
     int failures = 0;
 
-    auto runCase = [&](const char* name, Params::FilterType type, float freq, float gainDb, float q,
-                        double probeHz, double expectedGainLinear, double tolerance)
+    auto runCaseFull = [&](const char* name, Params::FilterType type, float freq, float gainDb, float q,
+                            float slope, bool brickwall,
+                            double probeHz, double expectedGainLinear, double tolerance)
     {
         juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) blockSize, 1 };
 
@@ -47,7 +48,7 @@ int main()
 
         FilterBand testBand;
         testBand.prepare(spec);
-        testBand.update(type, freq, gainDb, q);
+        testBand.update(type, freq, gainDb, q, slope, brickwall);
         const double outputRms = rmsOfSine(testBand, sampleRate, probeHz, blockSize);
 
         const double measuredGain = outputRms / inputRms;
@@ -56,6 +57,12 @@ int main()
                      name, probeHz, expectedGainLinear, measuredGain, pass ? "PASS" : "FAIL");
         if (!pass)
             ++failures;
+    };
+
+    auto runCase = [&](const char* name, Params::FilterType type, float freq, float gainDb, float q,
+                        double probeHz, double expectedGainLinear, double tolerance)
+    {
+        runCaseFull(name, type, freq, gainDb, q, 12.0f, false, probeHz, expectedGainLinear, tolerance);
     };
 
     // Bell +12dB @ 1kHz, Q=1: at the center frequency, gain should approach the full linear boost.
@@ -84,6 +91,34 @@ int main()
     runCase("High shelf above corner", Params::FilterType::highShelf, 5000.0f, 12.0f, 0.707f, 15000.0, shelfGainLinear, 0.2 * shelfGainLinear);
     // High shelf: a tone well below the corner should be close to unity.
     runCase("High shelf below corner", Params::FilterType::highShelf, 5000.0f, 12.0f, 0.707f, 200.0, 1.0, 0.2);
+
+    // Notch @ 1kHz: the center tone should be nulled, an octave away should pass.
+    runCase("Notch @ center", Params::FilterType::notch, 1000.0f, 0.0f, 2.0f, 1000.0, 0.0, 0.05);
+    runCase("Notch off center", Params::FilterType::notch, 1000.0f, 0.0f, 2.0f, 4000.0, 1.0, 0.15);
+
+    // Band pass @ 1kHz: center passes near unity, two octaves away is attenuated.
+    runCase("Band pass @ center", Params::FilterType::bandPass, 1000.0f, 0.0f, 1.0f, 1000.0, 1.0, 0.15);
+    runCase("Band pass off center", Params::FilterType::bandPass, 1000.0f, 0.0f, 1.0f, 100.0, 0.1, 0.1);
+
+    // All pass @ 1kHz: magnitude untouched everywhere.
+    runCase("All pass @ center", Params::FilterType::allPass, 1000.0f, 0.0f, 1.0f, 1000.0, 1.0, 0.1);
+
+    // Tilt shelf +12dB @ 1kHz: about -6dB well below the pivot, about +6dB well above it.
+    const double halfDown = juce::Decibels::decibelsToGain(-6.0f);
+    const double halfUp = juce::Decibels::decibelsToGain(6.0f);
+    runCase("Tilt shelf low side", Params::FilterType::tiltShelf, 1000.0f, 12.0f, 0.707f, 60.0, halfDown, 0.15);
+    runCase("Tilt shelf high side", Params::FilterType::tiltShelf, 1000.0f, 12.0f, 0.707f, 15000.0, halfUp, 0.3);
+
+    // Flat tilt must not be identity: the low side of a +12dB tilt should sit clearly below unity.
+    runCase("Flat tilt low side", Params::FilterType::flatTilt, 1000.0f, 12.0f, 0.707f, 40.0, halfDown, 0.2);
+
+    // Slope: 96 dB/oct low cut is drastically steeper than 12 dB/oct one octave below cutoff.
+    runCaseFull("Low cut 96dB/oct", Params::FilterType::lowCut, 1000.0f, 0.0f, 0.707f, 96.0f, false, 500.0, 0.0, 0.01);
+    runCaseFull("Low cut 96dB/oct passband", Params::FilterType::lowCut, 1000.0f, 0.0f, 0.707f, 96.0f, false, 8000.0, 1.0, 0.2);
+
+    // Brickwall low cut: same steep rejection via the 16th-order Butterworth design path.
+    runCaseFull("Brickwall low cut stopband", Params::FilterType::lowCut, 1000.0f, 0.0f, 0.707f, 12.0f, true, 500.0, 0.0, 0.01);
+    runCaseFull("Brickwall low cut passband", Params::FilterType::lowCut, 1000.0f, 0.0f, 0.707f, 12.0f, true, 8000.0, 1.0, 0.2);
 
     if (failures == 0)
     {

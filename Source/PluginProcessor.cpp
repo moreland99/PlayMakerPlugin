@@ -4,8 +4,9 @@
 PlaymakersEQAudioProcessor::PlaymakersEQAudioProcessor()
     : AudioProcessor(BusesProperties()
                           .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts(*this, nullptr, "PARAMETERS", Params::createParameterLayout())
+                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)
+                          .withInput("Sidechain", juce::AudioChannelSet::stereo(), false)),
+      apvts(*this, &undoManager, "PARAMETERS", Params::createParameterLayout())
 {
     for (int i = 0; i < Params::numBands; ++i)
     {
@@ -17,10 +18,28 @@ PlaymakersEQAudioProcessor::PlaymakersEQAudioProcessor()
         p.q = apvts.getRawParameterValue(Params::bandParamID(i, "q"));
         p.stereoMode = apvts.getRawParameterValue(Params::bandParamID(i, "stereoMode"));
         p.balance = apvts.getRawParameterValue(Params::bandParamID(i, "balance"));
+        p.slope = apvts.getRawParameterValue(Params::bandParamID(i, "slope"));
+        p.brickwall = apvts.getRawParameterValue(Params::bandParamID(i, "brickwall"));
+        p.dynEnabled = apvts.getRawParameterValue(Params::bandParamID(i, "dynEnabled"));
+        p.dynThreshold = apvts.getRawParameterValue(Params::bandParamID(i, "dynThreshold"));
+        p.dynRange = apvts.getRawParameterValue(Params::bandParamID(i, "dynRange"));
+        p.dynRatio = apvts.getRawParameterValue(Params::bandParamID(i, "dynRatio"));
+        p.dynAttack = apvts.getRawParameterValue(Params::bandParamID(i, "dynAttack"));
+        p.dynRelease = apvts.getRawParameterValue(Params::bandParamID(i, "dynRelease"));
+        p.dynRelativeBlend = apvts.getRawParameterValue(Params::bandParamID(i, "dynRelativeBlend"));
+        p.dynSidechainBlend = apvts.getRawParameterValue(Params::bandParamID(i, "dynSidechainBlend"));
     }
+
+    globalPointers.phaseMode = apvts.getRawParameterValue("phaseMode");
+    globalPointers.linearQuality = apvts.getRawParameterValue("linearQuality");
+
+    startTimerHz(8);
 }
 
-PlaymakersEQAudioProcessor::~PlaymakersEQAudioProcessor() = default;
+PlaymakersEQAudioProcessor::~PlaymakersEQAudioProcessor()
+{
+    stopTimer();
+}
 
 void PlaymakersEQAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
@@ -34,25 +53,187 @@ void PlaymakersEQAudioProcessor::prepareToPlay(double sampleRate, int samplesPer
     for (auto& band : bands)
         band.prepare(monoSpec);
 
+    for (auto& det : dynDetectors)
+        det.prepare(sampleRate);
+
     for (int i = 0; i < Params::numBands; ++i)
-        updateBandCoefficients(i);
+    {
+        auto& p = paramPointers[(size_t) i];
+        auto& sm = smoothers[(size_t) i];
+        for (auto* s : { &sm.freq, &sm.gain, &sm.q })
+            s->reset(sampleRate, 0.02);
+        sm.freq.setCurrentAndTargetValue(p.freq->load());
+        sm.gain.setCurrentAndTargetValue(p.gain->load());
+        sm.q.setCurrentAndTargetValue(p.q->load());
+        updateBandCoefficients(i, 0.0f, 1);
+    }
+
+    const auto channels = juce::jmax(1, getMainBusNumOutputChannels());
+    linearEQ.prepare({ sampleRate, (juce::uint32) samplesPerBlock, (juce::uint32) channels });
+
+    const auto mode = static_cast<Params::PhaseMode>((int) globalPointers.phaseMode->load());
+    const auto quality = (int) globalPointers.linearQuality->load();
+    linearEQ.setNumTaps(firTapsForMode(mode, quality));
+    setLatencySamples(mode == Params::PhaseMode::zeroLatency ? 0 : linearEQ.getLatencySamples());
+    lastFirParamsHash = 0; // force a rebuild on the next timer tick
 
     scratchPreL.setSize(1, samplesPerBlock);
     scratchPreR.setSize(1, samplesPerBlock);
     scratchA.setSize(1, samplesPerBlock);
     scratchB.setSize(1, samplesPerBlock);
     monoScratch.resize((size_t) samplesPerBlock);
+    preMonoScratch.resize((size_t) samplesPerBlock);
+    scMonoScratch.resize((size_t) samplesPerBlock);
+    detectorScratch.resize((size_t) samplesPerBlock);
 }
 
 void PlaymakersEQAudioProcessor::releaseResources()
 {
 }
 
-void PlaymakersEQAudioProcessor::updateBandCoefficients(int bandIndex)
+int PlaymakersEQAudioProcessor::firTapsForMode(Params::PhaseMode mode, int quality) const
+{
+    if (mode == Params::PhaseMode::lowLatencyCorrected)
+        return 127;
+    switch (quality)
+    {
+        case 0: return 511;
+        case 2: return 8191;
+        case 1:
+        default: return 2047;
+    }
+}
+
+bool PlaymakersEQAudioProcessor::bandUsesFIR(int bandIndex) const
+{
+    // The FIR carries only plain stereo-linked static bands. Dynamic bands and bands with
+    // stereo/MS routing keep the minimum-phase IIR path even in FIR modes, layered on top.
+    const auto& p = paramPointers[(size_t) bandIndex];
+    if (p.enabled->load() < 0.5f)
+        return false;
+
+    const auto type = static_cast<Params::FilterType>((int) p.type->load());
+    if (p.dynEnabled->load() >= 0.5f && Params::typeSupportsDynamics(type))
+        return false;
+
+    return static_cast<Params::StereoMode>((int) p.stereoMode->load()) == Params::StereoMode::leftRight
+        && std::abs(p.balance->load()) < 0.001f;
+}
+
+juce::uint64 PlaymakersEQAudioProcessor::computeParamsHash() const
+{
+    auto fold = [](juce::uint64 h, float v)
+    {
+        juce::uint32 bits;
+        std::memcpy(&bits, &v, sizeof(bits));
+        return h * 1099511628211ULL + bits;
+    };
+
+    juce::uint64 h = 14695981039346656037ULL;
+    for (const auto& p : paramPointers)
+        for (auto* v : { p.enabled, p.type, p.freq, p.gain, p.q, p.stereoMode, p.balance,
+                          p.slope, p.brickwall, p.dynEnabled })
+            h = fold(h, v->load());
+
+    h = fold(h, globalPointers.phaseMode->load());
+    h = fold(h, globalPointers.linearQuality->load());
+    h = fold(h, (float) currentSampleRate);
+    return h;
+}
+
+void PlaymakersEQAudioProcessor::rebuildLinearPhase(Params::PhaseMode mode)
+{
+    if (currentSampleRate <= 0.0)
+        return;
+
+    // Snapshot stage sets for all FIR-qualifying bands, then sample the composite magnitude.
+    std::vector<FilterBand::StageSet> stageSets;
+    for (int i = 0; i < Params::numBands; ++i)
+    {
+        if (!bandUsesFIR(i))
+            continue;
+
+        const auto& p = paramPointers[(size_t) i];
+        stageSets.push_back(FilterBand::computeStages(
+            static_cast<Params::FilterType>((int) p.type->load()), currentSampleRate,
+            p.freq->load(), p.gain->load(), p.q->load(), p.slope->load(), p.brickwall->load() >= 0.5f));
+    }
+
+    linearEQ.setNumTaps(firTapsForMode(mode, (int) globalPointers.linearQuality->load()));
+    linearEQ.updateResponse(currentSampleRate, [this, &stageSets](double freq)
+    {
+        double magnitude = 1.0;
+        for (const auto& set : stageSets)
+            magnitude *= FilterBand::getMagnitudeForFrequency(set, freq, currentSampleRate);
+        return magnitude;
+    });
+}
+
+void PlaymakersEQAudioProcessor::timerCallback()
+{
+    const auto mode = static_cast<Params::PhaseMode>((int) globalPointers.phaseMode->load());
+    const auto quality = (int) globalPointers.linearQuality->load();
+
+    const int wantedLatency = mode == Params::PhaseMode::zeroLatency
+        ? 0
+        : firTapsForMode(mode, quality) / 2;
+    if (wantedLatency != getLatencySamples())
+        setLatencySamples(wantedLatency);
+
+    if (mode == Params::PhaseMode::zeroLatency)
+        return;
+
+    const auto hash = computeParamsHash();
+    if (hash == lastFirParamsHash)
+        return;
+
+    lastFirParamsHash = hash;
+    rebuildLinearPhase(mode);
+}
+
+void PlaymakersEQAudioProcessor::toggleAB()
+{
+    auto current = apvts.copyState();
+    if (onSlotA)
+    {
+        slotA = current;
+        if (slotB.isValid())
+            apvts.replaceState(slotB.createCopy());
+        onSlotA = false;
+    }
+    else
+    {
+        slotB = current;
+        if (slotA.isValid())
+            apvts.replaceState(slotA.createCopy());
+        onSlotA = true;
+    }
+}
+
+void PlaymakersEQAudioProcessor::copyCurrentToOtherSlot()
+{
+    if (onSlotA)
+        slotB = apvts.copyState();
+    else
+        slotA = apvts.copyState();
+}
+
+void PlaymakersEQAudioProcessor::updateBandCoefficients(int bandIndex, float dynGainOffsetDb, int numSamplesForSmoothing)
 {
     const auto& p = paramPointers[(size_t) bandIndex];
+    auto& sm = smoothers[(size_t) bandIndex];
+
+    sm.freq.setTargetValue(p.freq->load());
+    sm.gain.setTargetValue(p.gain->load());
+    sm.q.setTargetValue(p.q->load());
+
+    const auto freq = sm.freq.skip(numSamplesForSmoothing);
+    const auto gain = sm.gain.skip(numSamplesForSmoothing);
+    const auto q = sm.q.skip(numSamplesForSmoothing);
+
     const auto type = static_cast<Params::FilterType>((int) p.type->load());
-    bands[(size_t) bandIndex].update(type, p.freq->load(), p.gain->load(), p.q->load());
+    bands[(size_t) bandIndex].update(type, freq, gain + dynGainOffsetDb, q,
+                                      p.slope->load(), p.brickwall->load() >= 0.5f);
 }
 
 bool PlaymakersEQAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -61,30 +242,94 @@ bool PlaymakersEQAudioProcessor::isBusesLayoutSupported(const BusesLayout& layou
         && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
 
-    return layouts.getMainOutputChannelSet() == layouts.getMainInputChannelSet();
+    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
+        return false;
+
+    // Sidechain: disabled, mono, or stereo are all fine.
+    if (layouts.inputBuses.size() > 1)
+    {
+        const auto sc = layouts.getChannelSet(true, 1);
+        if (!sc.isDisabled() && sc != juce::AudioChannelSet::mono() && sc != juce::AudioChannelSet::stereo())
+            return false;
+    }
+
+    return true;
 }
 
 void PlaymakersEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
 
-    for (auto channel = getTotalNumInputChannels(); channel < getTotalNumOutputChannels(); ++channel)
-        buffer.clear(channel, 0, buffer.getNumSamples());
-
-    const auto numChannels = buffer.getNumChannels();
-    if (numChannels == 0)
+    auto mainBus = getBusBuffer(buffer, true, 0);
+    const auto numChannels = mainBus.getNumChannels();
+    const auto numSamples = buffer.getNumSamples();
+    if (numChannels == 0 || numSamples == 0)
         return;
 
-    const auto numSamples = buffer.getNumSamples();
-    auto* leftData = buffer.getWritePointer(0);
-    auto* rightData = numChannels > 1 ? buffer.getWritePointer(1) : nullptr;
+    auto* leftData = mainBus.getWritePointer(0);
+    auto* rightData = numChannels > 1 ? mainBus.getWritePointer(1) : nullptr;
+
+    // Pre-EQ mono + sidechain mono captured up front for the dynamic detectors.
+    for (int n = 0; n < numSamples; ++n)
+        preMonoScratch[(size_t) n] = rightData != nullptr ? 0.5f * (leftData[n] + rightData[n]) : leftData[n];
+
+    std::fill(scMonoScratch.begin(), scMonoScratch.begin() + numSamples, 0.0f);
+    if (getBusCount(true) > 1)
+    {
+        auto scBus = getBusBuffer(buffer, true, 1);
+        const auto scChannels = scBus.getNumChannels();
+        if (scChannels > 0)
+        {
+            for (int n = 0; n < numSamples; ++n)
+            {
+                float sum = 0.0f;
+                for (int ch = 0; ch < scChannels; ++ch)
+                    sum += scBus.getReadPointer(ch)[n];
+                scMonoScratch[(size_t) n] = sum / (float) scChannels;
+            }
+        }
+    }
+
+    const auto mode = static_cast<Params::PhaseMode>((int) globalPointers.phaseMode->load());
+
+    // FIR modes: the composite static curve runs through the convolver first.
+    if (mode != Params::PhaseMode::zeroLatency)
+    {
+        juce::dsp::AudioBlock<float> block(mainBus);
+        linearEQ.process(juce::dsp::ProcessContextReplacing<float>(block));
+    }
 
     for (int i = 0; i < Params::numBands; ++i)
     {
-        if (paramPointers[(size_t) i].enabled->load() < 0.5f)
+        const auto& p = paramPointers[(size_t) i];
+        if (p.enabled->load() < 0.5f)
+            continue;
+        if (mode != Params::PhaseMode::zeroLatency && bandUsesFIR(i))
             continue;
 
-        updateBandCoefficients(i);
+        const auto type = static_cast<Params::FilterType>((int) p.type->load());
+
+        float dynOffsetDb = 0.0f;
+        if (p.dynEnabled->load() >= 0.5f && Params::typeSupportsDynamics(type))
+        {
+            const float scBlend = p.dynSidechainBlend->load();
+            for (int n = 0; n < numSamples; ++n)
+                detectorScratch[(size_t) n] = preMonoScratch[(size_t) n] * (1.0f - scBlend)
+                                             + scMonoScratch[(size_t) n] * scBlend;
+
+            DynamicBandDetector::Settings s;
+            s.freqHz = p.freq->load();
+            s.q = p.q->load();
+            s.thresholdDb = p.dynThreshold->load();
+            s.rangeDb = p.dynRange->load();
+            s.ratio = p.dynRatio->load();
+            s.attackMs = p.dynAttack->load();
+            s.releaseMs = p.dynRelease->load();
+            s.relativeBlend = p.dynRelativeBlend->load();
+            dynOffsetDb = dynDetectors[(size_t) i].processBlock(detectorScratch.data(), numSamples, s);
+        }
+
+        updateBandCoefficients(i, dynOffsetDb, numSamples);
 
         if (rightData == nullptr)
         {

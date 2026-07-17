@@ -4,6 +4,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "Params.h"
 #include "FilterBand.h"
+#include "Theme.h"
 
 // Lock-free-ish single-producer/single-consumer FFT capture: audio thread pushes samples,
 // UI thread polls for a completed block. A brief data race on the "ready" flag is an
@@ -65,7 +66,8 @@ class SpectrumAnalyzerComponent : public juce::Component, private juce::Timer
 public:
     SpectrumAnalyzerComponent(juce::AudioProcessorValueTreeState& stateToRead,
                                AnalyzerDataProvider& analyzerToRead,
-                               double& sampleRateToRead);
+                               double& sampleRateToRead,
+                               const Theme& themeToUse);
     ~SpectrumAnalyzerComponent() override;
 
     void paint(juce::Graphics& g) override;
@@ -98,7 +100,7 @@ private:
     void drawCreatePreview(juce::Graphics& g, juce::Rectangle<float> bounds);
     void drawMarquee(juce::Graphics& g);
     void drawResponsePath(juce::Graphics& g, juce::Rectangle<float> bounds,
-                          Params::FilterType type, float freq, float gain, float q,
+                          const FilterBand::StageSet& stages,
                           juce::Colour colour, float strokeWidth);
 
     juce::Point<float> handlePosition(int bandIndex, juce::Rectangle<float> bounds) const;
@@ -127,6 +129,7 @@ private:
     juce::AudioProcessorValueTreeState& apvts;
     AnalyzerDataProvider& analyzer;
     double& sampleRate;
+    const Theme& theme;
     std::array<float, AnalyzerDataProvider::fftSize / 2> latestMagnitudesDb {};
 
     juce::SparseSet<int> selectedBands;
