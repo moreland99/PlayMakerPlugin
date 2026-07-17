@@ -33,6 +33,26 @@ inline const juce::StringArray& filterTypeNames()
     return names;
 }
 
+// Order fixed for the plugin's lifetime, same reasoning as FilterType.
+enum class StereoMode
+{
+    leftRight = 0,
+    leftOnly,
+    rightOnly,
+    midSide,
+    midOnly,
+    sideOnly,
+    numStereoModes
+};
+
+inline const juce::StringArray& stereoModeNames()
+{
+    static const juce::StringArray names {
+        "Left/Right", "Left Only", "Right Only", "Mid/Side", "Mid Only", "Side Only"
+    };
+    return names;
+}
+
 inline juce::String bandParamID(int bandIndex, const juce::String& suffix)
 {
     return "band" + juce::String(bandIndex) + "_" + suffix;
@@ -45,6 +65,8 @@ struct BandParamPointers
     std::atomic<float>* freq = nullptr;
     std::atomic<float>* gain = nullptr;
     std::atomic<float>* q = nullptr;
+    std::atomic<float>* stereoMode = nullptr;
+    std::atomic<float>* balance = nullptr;
 };
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();

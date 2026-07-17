@@ -15,6 +15,8 @@ PlaymakersEQAudioProcessor::PlaymakersEQAudioProcessor()
         p.freq = apvts.getRawParameterValue(Params::bandParamID(i, "freq"));
         p.gain = apvts.getRawParameterValue(Params::bandParamID(i, "gain"));
         p.q = apvts.getRawParameterValue(Params::bandParamID(i, "q"));
+        p.stereoMode = apvts.getRawParameterValue(Params::bandParamID(i, "stereoMode"));
+        p.balance = apvts.getRawParameterValue(Params::bandParamID(i, "balance"));
     }
 }
 
@@ -32,6 +34,11 @@ void PlaymakersEQAudioProcessor::prepareToPlay(double sampleRate, int samplesPer
 
     for (int i = 0; i < Params::numBands; ++i)
         updateBandCoefficients(i);
+
+    scratchPreL.setSize(1, samplesPerBlock);
+    scratchPreR.setSize(1, samplesPerBlock);
+    scratchA.setSize(1, samplesPerBlock);
+    scratchB.setSize(1, samplesPerBlock);
 }
 
 void PlaymakersEQAudioProcessor::releaseResources()
@@ -65,9 +72,9 @@ void PlaymakersEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
     if (numChannels == 0)
         return;
 
-    juce::dsp::AudioBlock<float> block(buffer);
-    auto leftBlock = block.getSingleChannelBlock(0);
-    auto rightBlock = numChannels > 1 ? block.getSingleChannelBlock(1) : leftBlock;
+    const auto numSamples = buffer.getNumSamples();
+    auto* leftData = buffer.getWritePointer(0);
+    auto* rightData = numChannels > 1 ? buffer.getWritePointer(1) : nullptr;
 
     for (int i = 0; i < Params::numBands; ++i)
     {
@@ -76,9 +83,78 @@ void PlaymakersEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
 
         updateBandCoefficients(i);
 
-        bands[(size_t) i].processLeft(juce::dsp::ProcessContextReplacing<float>(leftBlock));
-        if (numChannels > 1)
-            bands[(size_t) i].processRight(juce::dsp::ProcessContextReplacing<float>(rightBlock));
+        if (rightData == nullptr)
+        {
+            juce::dsp::AudioBlock<float> monoBlock(&leftData, 1, (size_t) numSamples);
+            bands[(size_t) i].processLeft(juce::dsp::ProcessContextReplacing<float>(monoBlock));
+            continue;
+        }
+
+        processStereoBand(i, leftData, rightData, numSamples);
+    }
+}
+
+void PlaymakersEQAudioProcessor::processStereoBand(int bandIndex, float* leftData, float* rightData, int numSamples)
+{
+    const auto& p = paramPointers[(size_t) bandIndex];
+    const auto mode = static_cast<Params::StereoMode>((int) p.stereoMode->load());
+    const bool msDomain = (mode == Params::StereoMode::midSide
+                            || mode == Params::StereoMode::midOnly
+                            || mode == Params::StereoMode::sideOnly);
+
+    float effectiveBalance = p.balance->load();
+    if (mode == Params::StereoMode::leftOnly || mode == Params::StereoMode::midOnly)
+        effectiveBalance = -1.0f;
+    else if (mode == Params::StereoMode::rightOnly || mode == Params::StereoMode::sideOnly)
+        effectiveBalance = 1.0f;
+
+    const float wetA = 1.0f - juce::jmax(0.0f, effectiveBalance);
+    const float wetB = 1.0f - juce::jmax(0.0f, -effectiveBalance);
+
+    scratchPreL.copyFrom(0, 0, leftData, numSamples);
+    scratchPreR.copyFrom(0, 0, rightData, numSamples);
+    auto* preL = scratchPreL.getReadPointer(0);
+    auto* preR = scratchPreR.getReadPointer(0);
+
+    auto* workA = scratchA.getWritePointer(0);
+    auto* workB = scratchB.getWritePointer(0);
+
+    for (int n = 0; n < numSamples; ++n)
+    {
+        if (msDomain)
+        {
+            workA[n] = 0.5f * (preL[n] + preR[n]);
+            workB[n] = 0.5f * (preL[n] - preR[n]);
+        }
+        else
+        {
+            workA[n] = preL[n];
+            workB[n] = preR[n];
+        }
+    }
+
+    juce::dsp::AudioBlock<float> blockA(scratchA);
+    juce::dsp::AudioBlock<float> blockB(scratchB);
+    bands[(size_t) bandIndex].processLeft(juce::dsp::ProcessContextReplacing<float>(blockA));
+    bands[(size_t) bandIndex].processRight(juce::dsp::ProcessContextReplacing<float>(blockB));
+
+    for (int n = 0; n < numSamples; ++n)
+    {
+        const float preA = msDomain ? 0.5f * (preL[n] + preR[n]) : preL[n];
+        const float preB = msDomain ? 0.5f * (preL[n] - preR[n]) : preR[n];
+        const float mixedA = preA + wetA * (workA[n] - preA);
+        const float mixedB = preB + wetB * (workB[n] - preB);
+
+        if (msDomain)
+        {
+            leftData[n] = mixedA + mixedB;
+            rightData[n] = mixedA - mixedB;
+        }
+        else
+        {
+            leftData[n] = mixedA;
+            rightData[n] = mixedB;
+        }
     }
 }
 

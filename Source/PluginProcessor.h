@@ -39,9 +39,12 @@ public:
 
 private:
     void updateBandCoefficients(int bandIndex);
+    void processStereoBand(int bandIndex, float* leftData, float* rightData, int numSamples);
 
     std::array<FilterBand, Params::numBands> bands;
     std::array<Params::BandParamPointers, Params::numBands> paramPointers;
+
+    juce::AudioBuffer<float> scratchPreL, scratchPreR, scratchA, scratchB;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PlaymakersEQAudioProcessor)
 };

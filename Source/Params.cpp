@@ -47,6 +47,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
             qRange,
             0.707f,
             juce::AudioParameterFloatAttributes()));
+
+        params.push_back(std::make_unique<juce::AudioParameterChoice>(
+            juce::ParameterID(bandParamID(i, "stereoMode"), 1),
+            "Band " + juce::String(i + 1) + " Stereo Mode",
+            stereoModeNames(),
+            static_cast<int>(StereoMode::leftRight)));
+
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(
+            juce::ParameterID(bandParamID(i, "balance"), 1),
+            "Band " + juce::String(i + 1) + " Balance",
+            juce::NormalisableRange<float>(-1.0f, 1.0f, 0.001f),
+            0.0f,
+            juce::AudioParameterFloatAttributes()));
     }
 
     return { params.begin(), params.end() };
