@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
+#include "SpectrumAnalyzer.h"
 
 class PlaymakersEQAudioProcessorEditor : public juce::AudioProcessorEditor
 {
@@ -14,6 +15,7 @@ public:
 
 private:
     PlaymakersEQAudioProcessor& processor;
+    SpectrumAnalyzerComponent analyzer;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PlaymakersEQAudioProcessorEditor)
 };

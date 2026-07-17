@@ -24,6 +24,8 @@ PlaymakersEQAudioProcessor::~PlaymakersEQAudioProcessor() = default;
 
 void PlaymakersEQAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+    currentSampleRate = sampleRate;
+
     juce::dsp::ProcessSpec monoSpec;
     monoSpec.sampleRate = sampleRate;
     monoSpec.maximumBlockSize = (juce::uint32) samplesPerBlock;
@@ -39,6 +41,7 @@ void PlaymakersEQAudioProcessor::prepareToPlay(double sampleRate, int samplesPer
     scratchPreR.setSize(1, samplesPerBlock);
     scratchA.setSize(1, samplesPerBlock);
     scratchB.setSize(1, samplesPerBlock);
+    monoScratch.resize((size_t) samplesPerBlock);
 }
 
 void PlaymakersEQAudioProcessor::releaseResources()
@@ -92,6 +95,18 @@ void PlaymakersEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
 
         processStereoBand(i, leftData, rightData, numSamples);
     }
+
+    // Feed the analyzer a mono mixdown of the post-EQ signal.
+    if (rightData != nullptr)
+    {
+        for (int n = 0; n < numSamples; ++n)
+            monoScratch[(size_t) n] = 0.5f * (leftData[n] + rightData[n]);
+    }
+    else
+    {
+        std::copy(leftData, leftData + numSamples, monoScratch.begin());
+    }
+    postAnalyzer.pushSamples(monoScratch.data(), numSamples);
 }
 
 void PlaymakersEQAudioProcessor::processStereoBand(int bandIndex, float* leftData, float* rightData, int numSamples)

@@ -4,6 +4,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include "Params.h"
 #include "FilterBand.h"
+#include "SpectrumAnalyzer.h"
 
 class PlaymakersEQAudioProcessor : public juce::AudioProcessor
 {
@@ -37,6 +38,9 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
+    AnalyzerDataProvider& getPostAnalyzer() { return postAnalyzer; }
+    double& getSampleRateRef() { return currentSampleRate; }
+
 private:
     void updateBandCoefficients(int bandIndex);
     void processStereoBand(int bandIndex, float* leftData, float* rightData, int numSamples);
@@ -45,6 +49,9 @@ private:
     std::array<Params::BandParamPointers, Params::numBands> paramPointers;
 
     juce::AudioBuffer<float> scratchPreL, scratchPreR, scratchA, scratchB;
+    AnalyzerDataProvider postAnalyzer;
+    double currentSampleRate = 0.0;
+    std::vector<float> monoScratch;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PlaymakersEQAudioProcessor)
 };
