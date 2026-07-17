@@ -18,6 +18,7 @@ target_sources(PlaymakersEQ
     PRIVATE
         PluginProcessor.cpp
         PluginEditor.cpp
+        Params.cpp
 )
 
 target_compile_definitions(PlaymakersEQ

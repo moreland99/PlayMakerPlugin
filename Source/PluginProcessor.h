@@ -1,6 +1,9 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_dsp/juce_dsp.h>
+#include "Params.h"
+#include "FilterBand.h"
 
 class PlaymakersEQAudioProcessor : public juce::AudioProcessor
 {
@@ -32,6 +35,13 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
+    juce::AudioProcessorValueTreeState apvts;
+
 private:
+    void updateBandCoefficients(int bandIndex);
+
+    std::array<FilterBand, Params::numBands> bands;
+    std::array<Params::BandParamPointers, Params::numBands> paramPointers;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PlaymakersEQAudioProcessor)
 };
