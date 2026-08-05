@@ -446,16 +446,28 @@ void PlaymakersEQAudioProcessorEditor::applyBandAccentToInspector(int bandIndex)
 {
     const auto& t = themeManager.current();
     const auto colour = bandIndex >= 0 ? Theme::bandColour(bandIndex, t.isLight()) : t.signalOrange;
+
+    bool dynOn = false;
+    if (bandIndex >= 0)
+    {
+        const auto type = static_cast<Params::FilterType>(
+            (int) eqProcessor.apvts.getRawParameterValue(Params::bandParamID(bandIndex, "type"))->load());
+        dynOn = Params::typeSupportsDynamics(type)
+            && eqProcessor.apvts.getRawParameterValue(Params::bandParamID(bandIndex, "dynEnabled"))->load() >= 0.5f;
+    }
+
+    const auto dynColour = dynOn ? Theme::dynamicsColour(colour, t.isLight()) : colour;
     const auto colourStr = colour.toString();
+    const auto dynColourStr = dynColour.toString();
 
     inspectorTitle.setColour(juce::Label::textColourId, colour);
-    dynSectionLabel.setColour(juce::Label::textColourId, colour.withAlpha(0.85f));
+    dynSectionLabel.setColour(juce::Label::textColourId, dynColour.withAlpha(dynOn ? 1.0f : 0.7f));
     removeButton.getProperties().set("pmAccentColour", colourStr);
-    dynEnableButton.getProperties().set("pmAccentColour", colourStr);
     typeBox.getProperties().set("pmAccentColour", colourStr);
+    dynEnableButton.getProperties().set("pmAccentColour", dynColourStr);
 
     for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
-        s->getProperties().set("pmAccentColour", colourStr);
+        s->getProperties().set("pmAccentColour", dynColourStr);
 
     removeButton.repaint();
     dynEnableButton.repaint();
@@ -506,6 +518,16 @@ void PlaymakersEQAudioProcessorEditor::paint(juce::Graphics& g)
 
     const int primary = analyzer.getPrimarySelectedBand();
     const auto bandCol = primary >= 0 ? Theme::bandColour(primary, t.isLight()) : t.accent;
+    bool dynOn = false;
+    if (primary >= 0)
+    {
+        const auto type = static_cast<Params::FilterType>(
+            (int) eqProcessor.apvts.getRawParameterValue(Params::bandParamID(primary, "type"))->load());
+        dynOn = Params::typeSupportsDynamics(type)
+            && eqProcessor.apvts.getRawParameterValue(Params::bandParamID(primary, "dynEnabled"))->load() >= 0.5f;
+    }
+    const auto dynCol = dynOn ? Theme::dynamicsColour(bandCol, t.isLight()) : bandCol;
+
     g.setColour(bandCol.withAlpha(0.65f));
     g.fillRect(inspectorBounds.withHeight(2));
 
@@ -527,13 +549,16 @@ void PlaymakersEQAudioProcessorEditor::paint(juce::Graphics& g)
             g.drawRect(card.toFloat(), 1.0f);
         }
 
-        // Dynamics section plate — groups the dyn controls visually.
+        // Dynamics section plate — richer colour when Dynamics is On.
         if (!dynSectionBounds.isEmpty())
         {
-            g.setColour(t.isLight() ? t.softWhite.withAlpha(0.55f) : t.softWhite.withAlpha(0.035f));
+            g.setColour(dynOn
+                ? dynCol.withAlpha(t.isLight() ? 0.14f : 0.10f)
+                : (t.isLight() ? t.softWhite.withAlpha(0.55f) : t.softWhite.withAlpha(0.035f)));
             g.fillRect(dynSectionBounds.toFloat());
-            g.setColour(bandCol.withAlpha(t.isLight() ? 0.28f : 0.22f));
-            g.drawRect(dynSectionBounds.toFloat(), 1.0f);
+            g.setColour(dynCol.withAlpha(dynOn ? (t.isLight() ? 0.55f : 0.45f)
+                                               : (t.isLight() ? 0.22f : 0.18f)));
+            g.drawRect(dynSectionBounds.toFloat(), dynOn ? 1.5f : 1.0f);
         }
     }
 }

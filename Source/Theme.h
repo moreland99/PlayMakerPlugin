@@ -78,6 +78,13 @@ struct Theme
         return juce::Colour(palette[i]);
     }
 
+    // Stronger sibling of a band colour — used when Dynamics is engaged.
+    static juce::Colour dynamicsColour(juce::Colour band, bool forLightCanvas = false)
+    {
+        auto c = band.withMultipliedSaturation(forLightCanvas ? 1.45f : 1.35f);
+        return forLightCanvas ? c.darker(0.28f) : c.darker(0.18f).brighter(0.02f);
+    }
+
     static Theme dark() { return {}; }
 
     static Theme light()

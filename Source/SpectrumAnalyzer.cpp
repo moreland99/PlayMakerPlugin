@@ -343,11 +343,14 @@ void SpectrumAnalyzerComponent::drawBandCurves(juce::Graphics& g, juce::Rectangl
         const float dynRange = apvts.getRawParameterValue(Params::bandParamID(i, "dynRange"))->load();
 
         const auto base = Theme::bandColour(i, theme.isLight());
+        const auto dynTint = Theme::dynamicsColour(base, theme.isLight());
         const bool dimOthers = !selectedBands.isEmpty() && !selected;
-        const auto colour = dimOthers ? base.withAlpha(theme.isLight() ? 0.38f : 0.28f)
-                                      : (selected ? base : base.withAlpha(theme.isLight() ? 0.88f : 0.78f));
-        const float stroke = selected ? 2.5f : 1.35f;
-        const float fillA = selected ? (theme.isLight() ? 0.18f : 0.14f)
+        // Dynamic bands read a shade richer/darker than static ones.
+        const auto active = dynOn ? dynTint : base;
+        const auto colour = dimOthers ? active.withAlpha(theme.isLight() ? 0.38f : 0.28f)
+                                      : (selected ? active : active.withAlpha(theme.isLight() ? 0.88f : 0.78f));
+        const float stroke = selected ? (dynOn ? 2.7f : 2.5f) : 1.35f;
+        const float fillA = selected ? (theme.isLight() ? (dynOn ? 0.24f : 0.18f) : (dynOn ? 0.20f : 0.14f))
                                      : (dimOthers ? 0.03f : (theme.isLight() ? 0.09f : 0.07f));
 
         const auto stages = FilterBand::computeStages(type, sampleRate, freq, gain, q, slope, brickwall);
@@ -356,7 +359,8 @@ void SpectrumAnalyzerComponent::drawBandCurves(juce::Graphics& g, juce::Rectangl
         {
             const auto extreme = FilterBand::computeStages(type, sampleRate, freq,
                                                            gain + dynRange, q, slope, brickwall);
-            drawDynamicRangeFill(g, bounds, stages, extreme, base.withAlpha(selected ? 1.0f : 0.55f));
+            drawDynamicRangeFill(g, bounds, stages, extreme,
+                                 dynTint.withAlpha(selected ? 1.0f : 0.6f));
         }
 
         drawResponsePath(g, bounds, stages, colour, stroke, fillA);
@@ -379,6 +383,12 @@ void SpectrumAnalyzerComponent::drawBandHandles(juce::Graphics& g, juce::Rectang
         const bool selected = isSelected(i);
         const bool dimOthers = !selectedBands.isEmpty() && !selected;
         auto colour = Theme::bandColour(i, theme.isLight());
+        const auto type = static_cast<Params::FilterType>(
+            (int) apvts.getRawParameterValue(Params::bandParamID(i, "type"))->load());
+        const bool dynOn = Params::typeSupportsDynamics(type)
+            && apvts.getRawParameterValue(Params::bandParamID(i, "dynEnabled"))->load() >= 0.5f;
+        if (dynOn)
+            colour = Theme::dynamicsColour(colour, theme.isLight());
         if (dimOthers)
             colour = colour.withAlpha(theme.isLight() ? 0.42f : 0.35f);
 
