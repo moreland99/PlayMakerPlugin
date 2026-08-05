@@ -77,6 +77,12 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 
+    // Selection API for the band inspector.
+    int getPrimarySelectedBand() const;
+    juce::Array<int> getSelectedBandIndices() const;
+    void deleteSelectedBands();
+    std::function<void()> onSelectionChanged;
+
 private:
     enum class Gesture
     {
@@ -99,13 +105,22 @@ private:
     void drawBandHandles(juce::Graphics& g, juce::Rectangle<float> bounds);
     void drawCreatePreview(juce::Graphics& g, juce::Rectangle<float> bounds);
     void drawMarquee(juce::Graphics& g);
+    void drawEmptyState(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void drawSelectionReadout(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void notifySelectionChanged();
+    static juce::String formatFrequency(float freqHz);
     void drawResponsePath(juce::Graphics& g, juce::Rectangle<float> bounds,
                           const FilterBand::StageSet& stages,
-                          juce::Colour colour, float strokeWidth);
+                          juce::Colour colour, float strokeWidth, float fillAlpha = 0.0f);
+    void drawDynamicRangeFill(juce::Graphics& g, juce::Rectangle<float> bounds,
+                              const FilterBand::StageSet& staticStages,
+                              const FilterBand::StageSet& extremeStages,
+                              juce::Colour colour);
 
     juce::Point<float> handlePosition(int bandIndex, juce::Rectangle<float> bounds) const;
     int hitTestBand(juce::Point<float> pos, juce::Rectangle<float> bounds) const;
     int findFirstDisabledBand() const;
+    int countEnabledBands() const;
     static Params::FilterType defaultTypeForFrequency(float freqHz);
 
     void setBandEnabled(int bandIndex, bool enabled);
@@ -131,6 +146,9 @@ private:
     double& sampleRate;
     const Theme& theme;
     std::array<float, AnalyzerDataProvider::fftSize / 2> latestMagnitudesDb {};
+    std::array<float, AnalyzerDataProvider::fftSize / 2> smoothedMagnitudesDb {};
+    std::array<float, AnalyzerDataProvider::fftSize / 2> displayMagnitudesDb {};
+    bool spectrumInitialized = false;
 
     juce::SparseSet<int> selectedBands;
     Gesture gesture = Gesture::none;
@@ -146,10 +164,12 @@ private:
     float createPreviewGain = 0.0f;
     Params::FilterType createPreviewType = Params::FilterType::bell;
 
-    // Spectrum uses a wide absolute-level range; band curves/handles use ±gain range
-    // so click-to-set-gain lands in a usable part of the display.
-    static constexpr float spectrumMinDb = -90.0f;
-    static constexpr float spectrumMaxDb = 6.0f;
+    // Spectrum is atmosphere under the curves — soft, quiet, never the hero.
+    static constexpr float spectrumMinDb = -72.0f;
+    static constexpr float spectrumMaxDb = -6.0f;
+    static constexpr float spectrumHeightRatio = 0.48f;
+    static constexpr float spectrumAttack = 0.22f;
+    static constexpr float spectrumRelease = 0.08f;
     static constexpr float curveMinDb = -24.0f;
     static constexpr float curveMaxDb = 24.0f;
     static constexpr float handleHitRadiusPx = 14.0f;

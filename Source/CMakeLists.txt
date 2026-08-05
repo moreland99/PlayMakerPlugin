@@ -14,6 +14,22 @@ juce_add_plugin(PlaymakersEQ
     AU_MAIN_TYPE "kAudioUnitType_Effect"
 )
 
+juce_add_binary_data(PlaymakersEQAssets
+    SOURCES
+        ${CMAKE_SOURCE_DIR}/Assets/Fonts/PPMonumentWide-Black.otf
+        ${CMAKE_SOURCE_DIR}/Assets/Fonts/PPMonumentWide-Regular.otf
+        ${CMAKE_SOURCE_DIR}/Assets/Fonts/PPMonumentExtended-Black.otf
+        ${CMAKE_SOURCE_DIR}/Assets/Fonts/Helvetica.ttf
+        ${CMAKE_SOURCE_DIR}/Assets/Fonts/Helvetica-Bold.ttf
+        ${CMAKE_SOURCE_DIR}/Assets/Logos/PMlogo1.svg
+        ${CMAKE_SOURCE_DIR}/Assets/Logos/PMlogo1-mark.svg
+        ${CMAKE_SOURCE_DIR}/Assets/Logos/mark-black.png
+        ${CMAKE_SOURCE_DIR}/Assets/Logos/mark-white.png
+        ${CMAKE_SOURCE_DIR}/Assets/Logos/monogram-m.png
+        ${CMAKE_SOURCE_DIR}/Assets/Logos/hand-mark.png
+        ${CMAKE_SOURCE_DIR}/Assets/Logos/mark-on-orange.png
+)
+
 target_sources(PlaymakersEQ
     PRIVATE
         PluginProcessor.cpp
@@ -31,6 +47,7 @@ target_compile_definitions(PlaymakersEQ
 
 target_link_libraries(PlaymakersEQ
     PRIVATE
+        PlaymakersEQAssets
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
