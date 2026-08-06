@@ -6,7 +6,8 @@ PlaymakersEQAudioProcessor::PlaymakersEQAudioProcessor()
                           .withInput("Input", juce::AudioChannelSet::stereo(), true)
                           .withOutput("Output", juce::AudioChannelSet::stereo(), true)
                           .withInput("Sidechain", juce::AudioChannelSet::stereo(), false)),
-      apvts(*this, &undoManager, "PARAMETERS", Params::createParameterLayout())
+      apvts(*this, &undoManager, "PARAMETERS", Params::createParameterLayout()),
+      presetManager(apvts, undoManager)
 {
     for (int i = 0; i < Params::numBands; ++i)
     {
@@ -32,6 +33,8 @@ PlaymakersEQAudioProcessor::PlaymakersEQAudioProcessor()
 
     globalPointers.phaseMode = apvts.getRawParameterValue("phaseMode");
     globalPointers.linearQuality = apvts.getRawParameterValue("linearQuality");
+
+    presetManager.loadDefaultPresetIfPresent();
 
     startTimerHz(8);
 }
@@ -256,9 +259,23 @@ bool PlaymakersEQAudioProcessor::isBusesLayoutSupported(const BusesLayout& layou
     return true;
 }
 
-void PlaymakersEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void PlaymakersEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
+
+    if (presetManager.isMidiProgramChangeEnabled())
+    {
+        for (const auto metadata : midi)
+        {
+            const auto msg = metadata.getMessage();
+            if (msg.isProgramChange())
+            {
+                const int prog = msg.getProgramChangeNumber();
+                juce::MessageManager::callAsync([this, prog] { presetManager.loadFactoryProgram(prog); });
+            }
+        }
+    }
+    midi.clear();
 
     auto mainBus = getBusBuffer(buffer, true, 0);
     const auto numChannels = mainBus.getNumChannels();
@@ -435,7 +452,7 @@ const juce::String PlaymakersEQAudioProcessor::getName() const
 
 bool PlaymakersEQAudioProcessor::acceptsMidi() const
 {
-    return false;
+    return presetManager.isMidiProgramChangeEnabled();
 }
 
 bool PlaymakersEQAudioProcessor::producesMidi() const
@@ -455,21 +472,36 @@ double PlaymakersEQAudioProcessor::getTailLengthSeconds() const
 
 int PlaymakersEQAudioProcessor::getNumPrograms()
 {
-    return 1;
+    return presetManager.getProgramCount();
 }
 
 int PlaymakersEQAudioProcessor::getCurrentProgram()
 {
+    if (!presetManager.isMidiProgramChangeEnabled())
+        return 0;
+
+    int seen = 0;
+    const auto id = presetManager.getCurrentPresetId();
+    for (const auto& e : presetManager.getCatalog())
+    {
+        if (e.kind != PresetManager::Kind::factory)
+            continue;
+        if (e.id == id)
+            return seen;
+        ++seen;
+    }
     return 0;
 }
 
-void PlaymakersEQAudioProcessor::setCurrentProgram(int)
+void PlaymakersEQAudioProcessor::setCurrentProgram(int index)
 {
+    if (presetManager.isMidiProgramChangeEnabled())
+        presetManager.loadFactoryProgram(index);
 }
 
-const juce::String PlaymakersEQAudioProcessor::getProgramName(int)
+const juce::String PlaymakersEQAudioProcessor::getProgramName(int index)
 {
-    return {};
+    return presetManager.getFactoryProgramName(index);
 }
 
 void PlaymakersEQAudioProcessor::changeProgramName(int, const juce::String&)

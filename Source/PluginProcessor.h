@@ -7,6 +7,7 @@
 #include "DynamicBand.h"
 #include "LinearPhaseEQ.h"
 #include "SpectrumAnalyzer.h"
+#include "PresetManager.h"
 
 class PlaymakersEQAudioProcessor : public juce::AudioProcessor, private juce::Timer
 {
@@ -41,6 +42,7 @@ public:
     // Declared before apvts: the tree state keeps a pointer to it for undoable edits.
     juce::UndoManager undoManager;
     juce::AudioProcessorValueTreeState apvts;
+    PresetManager presetManager;
 
     AnalyzerDataProvider& getPostAnalyzer() { return postAnalyzer; }
     double& getSampleRateRef() { return currentSampleRate; }

@@ -5,6 +5,7 @@
 #include "SpectrumAnalyzer.h"
 #include "Theme.h"
 #include "PlaymakersLookAndFeel.h"
+#include "PresetBrowser.h"
 
 class PlaymakersEQAudioProcessorEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
@@ -46,7 +47,7 @@ private:
     juce::TextButton abButton { "A" };
     juce::TextButton copyButton { "Copy" };
     juce::TextButton expandButton { "Expand" };
-    juce::TextButton themeButton { "Light" };
+    PresetBrowser presetBrowser;
 
     bool expandedView = false;
     static constexpr int normalWidth = 1100;

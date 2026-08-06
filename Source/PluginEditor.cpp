@@ -3,7 +3,8 @@
 
 PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQAudioProcessor& p)
     : AudioProcessorEditor(&p), eqProcessor(p),
-      analyzer(p.apvts, p.getPostAnalyzer(), p.getSampleRateRef(), themeManager.current())
+      analyzer(p.apvts, p.getPostAnalyzer(), p.getSampleRateRef(), themeManager.current()),
+      presetBrowser(p.presetManager, themeManager)
 {
     setLookAndFeel(&lookAndFeel);
 
@@ -36,11 +37,36 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
         setSize(expandedView ? expandedWidth : normalWidth,
                 expandedView ? expandedHeight : normalHeight);
     };
-    themeButton.onClick = [this]
+
+    auto afterPresetLoad = [this]
     {
-        const bool goingLight = themeManager.current().name != "Light";
-        themeManager.setTheme(goingLight ? Theme::light() : Theme::dark());
-        themeButton.setButtonText(goingLight ? "Dark" : "Light");
+        const auto themeJSON = eqProcessor.apvts.state.getProperty("themeJSON").toString();
+        if (themeJSON.isNotEmpty())
+            themeManager.setTheme(Theme::fromJSON(themeJSON, Theme::dark()));
+
+        lookAndFeel.setTheme(themeManager.current());
+        applyThemeToButtons();
+        applyThemeToInspector();
+        presetBrowser.applyTheme(themeManager.current());
+        refreshInspector();
+        analyzer.repaint();
+        presetBrowser.refreshFromManager();
+        repaint();
+    };
+
+    eqProcessor.presetManager.onPresetLoaded = afterPresetLoad;
+
+    presetBrowser.onPresetApplied = afterPresetLoad;
+
+    presetBrowser.onThemeChanged = [this]
+    {
+        eqProcessor.apvts.state.setProperty("themeJSON", themeManager.current().toJSON(), nullptr);
+        lookAndFeel.setTheme(themeManager.current());
+        applyThemeToButtons();
+        applyThemeToInspector();
+        presetBrowser.applyTheme(themeManager.current());
+        analyzer.repaint();
+        repaint();
     };
 
     typeBox.addItemList(Params::filterTypeNames(), 1);
@@ -67,7 +93,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
 
     abButton.getProperties().set("pmAccent", true);
     removeButton.getProperties().set("pmAccent", true);
-    for (auto* b : { &undoButton, &redoButton, &abButton, &copyButton, &expandButton, &themeButton })
+    for (auto* b : { &undoButton, &redoButton, &abButton, &copyButton, &expandButton })
         b->getProperties().set("pmChrome", true);
 
     for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
@@ -93,8 +119,10 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
 
     analyzer.onSelectionChanged = [this] { refreshInspector(); };
 
-    for (auto* b : { &undoButton, &redoButton, &abButton, &copyButton, &expandButton, &themeButton, &removeButton })
+    for (auto* b : { &undoButton, &redoButton, &abButton, &copyButton, &expandButton, &removeButton })
         addAndMakeVisible(*b);
+
+    addAndMakeVisible(presetBrowser);
 
     addAndMakeVisible(analyzer);
     addAndMakeVisible(inspectorTitle);
@@ -122,6 +150,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
 
     applyThemeToButtons();
     applyThemeToInspector();
+    presetBrowser.applyTheme(themeManager.current());
     refreshInspector();
 
     setWantsKeyboardFocus(true);
@@ -580,6 +609,10 @@ void PlaymakersEQAudioProcessorEditor::resized()
     placeHeaderBtn(undoButton, 60);
     placeHeaderBtn(redoButton, 60);
 
+    auto presetArea = header.removeFromLeft(juce::jmin(280, header.getWidth() - 200));
+    presetBrowser.setBounds(presetArea.withHeight(26).withY(header.getY() + (header.getHeight() - 26) / 2));
+    header.removeFromLeft(8);
+
     auto placeRight = [&header](juce::TextButton& b, int w)
     {
         auto area = header.removeFromRight(w);
@@ -587,7 +620,6 @@ void PlaymakersEQAudioProcessorEditor::resized()
         b.setBounds(area.withHeight(26).withY(header.getY() + (header.getHeight() - 26) / 2));
     };
 
-    placeRight(themeButton, 58);
     placeRight(expandButton, 72);
     placeRight(copyButton, 58);
     placeRight(abButton, 34);
