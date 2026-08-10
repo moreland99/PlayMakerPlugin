@@ -3,7 +3,8 @@
 
 PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQAudioProcessor& p)
     : AudioProcessorEditor(&p), eqProcessor(p),
-      analyzer(p.apvts, p.getPostAnalyzer(), p.getSampleRateRef(), themeManager.current()),
+      analyzer(p.apvts, p.getPostAnalyzer(), p.getPreAnalyzer(), p.getSampleRateRef(), themeManager.current(),
+               &p.dynDisplayOffsetDb),
       presetBrowser(p.presetManager, themeManager)
 {
     setLookAndFeel(&lookAndFeel);
@@ -83,6 +84,32 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
         refreshInspector();
     };
 
+    bandEnabledButton.onClick = [this]
+    {
+        if (updatingInspector)
+            return;
+        if (!bandEnabledButton.getToggleState())
+        {
+            auto bands = analyzer.getSelectedBandIndices();
+            for (auto band : bands)
+            {
+                if (auto* p = eqProcessor.apvts.getParameter(Params::bandParamID(band, "solo")))
+                    p->setValueNotifyingHost(0.0f);
+            }
+        }
+        refreshInspector();
+    };
+
+    bandSoloButton.onClick = [this]
+    {
+        if (updatingInspector)
+            return;
+        applySoloToSelection(bandSoloButton.getToggleState());
+        refreshInspector();
+        analyzer.repaint();
+    };
+    bandSoloButton.setTooltip("Solo this band (only solo'd bands affect audio). Shortcut: S");
+
     dynEnableButton.onClick = [this]
     {
         if (updatingInspector)
@@ -91,17 +118,107 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
         refreshInspector();
     };
 
+    dynThresholdAutoButton.onClick = [this] { applyAutoThresholdCaptureToSelection(); };
+    dynThresholdAutoButton.setTooltip("Set threshold from current band level (play audio first)");
+    dynAutoThresholdButton.setTooltip("Follow input level as threshold (uses previous block's band level)");
+    dynAutoThresholdButton.onClick = [this]
+    {
+        if (!updatingInspector)
+            refreshInspector();
+    };
+    dynRangeSlider.onValueChange = [this]
+    {
+        if (updatingInspector)
+            return;
+        updateDynRangeLabelForBand(analyzer.getPrimarySelectedBand());
+    };
+
     abButton.getProperties().set("pmAccent", true);
     removeButton.getProperties().set("pmAccent", true);
+    dynThresholdAutoButton.getProperties().set("pmChrome", true);
     for (auto* b : { &undoButton, &redoButton, &abButton, &copyButton, &expandButton })
         b->getProperties().set("pmChrome", true);
+    for (auto* b : { &specPreButton, &specPostButton, &specFreezeButton })
+        b->getProperties().set("pmChrome", true);
+    pluginBypassButton.getProperties().set("pmChrome", true);
+    dynAutoThresholdButton.getProperties().set("pmChrome", true);
 
-    for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
+    for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider, &dynSidechainSlider })
     {
         s->setSliderStyle(juce::Slider::LinearHorizontal);
-        s->setTextBoxStyle(juce::Slider::TextBoxRight, false, 56, 22);
+        s->setTextBoxStyle(juce::Slider::TextBoxRight, false, 44, 20);
         s->setEnabled(false);
     }
+
+    qKnob.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    qKnob.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    qKnob.setEnabled(false);
+    qKnob.setTooltip("Q — also scroll wheel or ⌘-drag handle on the graph");
+
+    slopeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    slopeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 44, 20);
+    slopeSlider.setEnabled(false);
+
+    balanceSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    balanceSlider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    balanceSlider.setEnabled(false);
+
+    stereoModeBox.addItemList(Params::stereoModeNames(), 1);
+
+    displayRangeBox.addItem("±6 dB", 1);
+    displayRangeBox.addItem("±12 dB", 2);
+    displayRangeBox.addItem("±24 dB", 3);
+    displayRangeBox.addItem("±30 dB", 4);
+    displayRangeBox.setSelectedId(3, juce::dontSendNotification);
+    displayRangeBox.onChange = [this]
+    {
+        static const float halves[] = { 6.0f, 12.0f, 24.0f, 30.0f };
+        const int id = displayRangeBox.getSelectedId();
+        if (id >= 1 && id <= 4)
+        {
+            analyzer.setDisplayRangeHalfDb(halves[id - 1]);
+            eqProcessor.apvts.state.setProperty("displayRangeHalfDb", halves[id - 1], nullptr);
+        }
+    };
+
+    const float savedRange = (float) eqProcessor.apvts.state.getProperty("displayRangeHalfDb", 24.0);
+    if (savedRange == 6.0f) displayRangeBox.setSelectedId(1, juce::dontSendNotification);
+    else if (savedRange == 12.0f) displayRangeBox.setSelectedId(2, juce::dontSendNotification);
+    else if (savedRange == 30.0f) displayRangeBox.setSelectedId(4, juce::dontSendNotification);
+    else displayRangeBox.setSelectedId(3, juce::dontSendNotification);
+    analyzer.setDisplayRangeHalfDb(savedRange);
+
+    specPostButton.setToggleState(true, juce::dontSendNotification);
+    specPreButton.setToggleState(false, juce::dontSendNotification);
+    specSpanBox.addItem("60 dB", 1);
+    specSpanBox.addItem("90 dB", 2);
+    specSpanBox.setSelectedId(2, juce::dontSendNotification);
+
+    auto specToggled = [this]
+    {
+        if (!specPreButton.getToggleState() && !specPostButton.getToggleState())
+            specPostButton.setToggleState(true, juce::dontSendNotification);
+        applyAnalyzerOptions();
+    };
+    specPreButton.onClick = specToggled;
+    specPostButton.onClick = specToggled;
+    specFreezeButton.onClick = [this] { applyAnalyzerOptions(); };
+    specSpanBox.onChange = [this] { applyAnalyzerOptions(); };
+
+    loadAnalyzerOptionsFromState();
+
+    outputGainSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    outputGainSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 48, 20);
+    outputGainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        eqProcessor.apvts, "outputGain", outputGainSlider);
+    pluginBypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        eqProcessor.apvts, "pluginBypass", pluginBypassButton);
+    pluginBypassButton.setTooltip("Pass audio through without EQ (output gain still applies)");
+    pluginBypassButton.onClick = [this] { repaint(); };
+
+    buildTag.setText("UI Aug 10g", juce::dontSendNotification);
+    buildTag.setInterceptsMouseClicks(false, false);
+    buildTag.setTooltip("Build marker: if missing, remove this plugin and insert again (don't just rescan)");
 
     auto wireMetricEdit = [this](juce::Label& label, const char* suffix)
     {
@@ -119,8 +236,16 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
 
     analyzer.onSelectionChanged = [this] { refreshInspector(); };
 
+    displayRangeLabel.setVisible(true);
+    displayRangeBox.setVisible(true);
     for (auto* b : { &undoButton, &redoButton, &abButton, &copyButton, &expandButton, &removeButton })
         addAndMakeVisible(*b);
+    for (auto* b : { &specPreButton, &specPostButton, &specFreezeButton, &pluginBypassButton })
+        addAndMakeVisible(*b);
+    addAndMakeVisible(specSpanLabel);
+    addAndMakeVisible(specSpanBox);
+    addAndMakeVisible(outputGainLabel);
+    addAndMakeVisible(outputGainSlider);
 
     addAndMakeVisible(presetBrowser);
 
@@ -134,8 +259,22 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     addAndMakeVisible(qValueLabel);
     addAndMakeVisible(typeLabel);
     addAndMakeVisible(typeBox);
+    addAndMakeVisible(bandOptionsLabel);
+    addAndMakeVisible(bandEnabledButton);
+    addAndMakeVisible(bandSoloButton);
+    addAndMakeVisible(slopeLabel);
+    addAndMakeVisible(slopeSlider);
+    addAndMakeVisible(brickwallButton);
+    addAndMakeVisible(stereoLabel);
+    addAndMakeVisible(stereoModeBox);
+    addAndMakeVisible(balanceLabel);
+    addAndMakeVisible(balanceSlider);
+    addAndMakeVisible(displayRangeLabel);
+    addAndMakeVisible(displayRangeBox);
     addAndMakeVisible(dynSectionLabel);
     addAndMakeVisible(dynEnableButton);
+    addAndMakeVisible(dynThresholdAutoButton);
+    addAndMakeVisible(dynAutoThresholdButton);
     addAndMakeVisible(dynThresholdSlider);
     addAndMakeVisible(dynRangeSlider);
     addAndMakeVisible(dynRatioSlider);
@@ -146,7 +285,15 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     addAndMakeVisible(dynRatioLabel);
     addAndMakeVisible(dynAttackLabel);
     addAndMakeVisible(dynReleaseLabel);
+    addAndMakeVisible(dynSidechainLabel);
+    addAndMakeVisible(dynSidechainSlider);
+    addAndMakeVisible(qKnobLabel);
+    addAndMakeVisible(qKnob);
+    addAndMakeVisible(buildTag);
     addAndMakeVisible(emptyHint);
+
+    qCaption.setVisible(false);
+    qValueLabel.setVisible(false);
 
     applyThemeToButtons();
     applyThemeToInspector();
@@ -166,15 +313,65 @@ PlaymakersEQAudioProcessorEditor::~PlaymakersEQAudioProcessorEditor()
     setLookAndFeel(nullptr);
 }
 
+void PlaymakersEQAudioProcessorEditor::loadAnalyzerOptionsFromState()
+{
+    auto& state = eqProcessor.apvts.state;
+    const bool showPre = (int) state.getProperty("analyzerShowPre", 0) != 0;
+    const bool showPost = (int) state.getProperty("analyzerShowPost", 1) != 0;
+    const bool freeze = (int) state.getProperty("analyzerFrozen", 0) != 0;
+    const float span = (float) state.getProperty("analyzerSpanDb", 90.0);
+
+    specPreButton.setToggleState(showPre, juce::dontSendNotification);
+    specPostButton.setToggleState(showPost || !showPre, juce::dontSendNotification);
+    specFreezeButton.setToggleState(freeze, juce::dontSendNotification);
+    specSpanBox.setSelectedId(span <= 75.0f ? 1 : 2, juce::dontSendNotification);
+    applyAnalyzerOptions();
+}
+
+void PlaymakersEQAudioProcessorEditor::applyAnalyzerOptions()
+{
+    if (!specPreButton.getToggleState() && !specPostButton.getToggleState())
+        specPostButton.setToggleState(true, juce::dontSendNotification);
+
+    const bool showPre = specPreButton.getToggleState();
+    const bool showPost = specPostButton.getToggleState();
+    const bool freeze = specFreezeButton.getToggleState();
+    const float span = specSpanBox.getSelectedId() == 1 ? 60.0f : 90.0f;
+
+    analyzer.setShowPreSpectrum(showPre);
+    analyzer.setShowPostSpectrum(showPost);
+    analyzer.setSpectrumFrozen(freeze);
+    analyzer.setSpectrumSpanDb(span);
+
+    auto& state = eqProcessor.apvts.state;
+    state.setProperty("analyzerShowPre", showPre ? 1 : 0, nullptr);
+    state.setProperty("analyzerShowPost", showPost ? 1 : 0, nullptr);
+    state.setProperty("analyzerFrozen", freeze ? 1 : 0, nullptr);
+    state.setProperty("analyzerSpanDb", span, nullptr);
+
+    specPreButton.setAlpha(showPre ? 1.0f : 0.55f);
+    specPostButton.setAlpha(showPost ? 1.0f : 0.55f);
+    specFreezeButton.setAlpha(freeze ? 1.0f : 0.75f);
+}
+
 void PlaymakersEQAudioProcessorEditor::clearInspectorBindings()
 {
     typeAttachment.reset();
+    bandEnabledAttachment.reset();
+    bandSoloAttachment.reset();
+    slopeAttachment.reset();
+    brickwallAttachment.reset();
+    stereoModeAttachment.reset();
+    balanceAttachment.reset();
     dynEnableAttachment.reset();
     dynThresholdAttachment.reset();
+    dynAutoThresholdAttachment.reset();
     dynRangeAttachment.reset();
     dynRatioAttachment.reset();
     dynAttackAttachment.reset();
     dynReleaseAttachment.reset();
+    qKnobAttachment.reset();
+    dynSidechainAttachment.reset();
     boundBand = -1;
 }
 
@@ -192,10 +389,24 @@ void PlaymakersEQAudioProcessorEditor::bindInspectorToBand(int bandIndex)
 
     // Type is applied manually so multi-select can share the change.
     typeAttachment.reset();
+    bandEnabledAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        apvts, Params::bandParamID(bandIndex, "enabled"), bandEnabledButton);
+    bandSoloAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        apvts, Params::bandParamID(bandIndex, "solo"), bandSoloButton);
+    slopeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        apvts, Params::bandParamID(bandIndex, "slope"), slopeSlider);
+    brickwallAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        apvts, Params::bandParamID(bandIndex, "brickwall"), brickwallButton);
+    stereoModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        apvts, Params::bandParamID(bandIndex, "stereoMode"), stereoModeBox);
+    balanceAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        apvts, Params::bandParamID(bandIndex, "balance"), balanceSlider);
     dynEnableAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         apvts, Params::bandParamID(bandIndex, "dynEnabled"), dynEnableButton);
     dynThresholdAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         apvts, Params::bandParamID(bandIndex, "dynThreshold"), dynThresholdSlider);
+    dynAutoThresholdAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        apvts, Params::bandParamID(bandIndex, "dynAutoThreshold"), dynAutoThresholdButton);
     dynRangeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         apvts, Params::bandParamID(bandIndex, "dynRange"), dynRangeSlider);
     dynRatioAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
@@ -204,6 +415,70 @@ void PlaymakersEQAudioProcessorEditor::bindInspectorToBand(int bandIndex)
         apvts, Params::bandParamID(bandIndex, "dynAttack"), dynAttackSlider);
     dynReleaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         apvts, Params::bandParamID(bandIndex, "dynRelease"), dynReleaseSlider);
+    qKnobAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        apvts, Params::bandParamID(bandIndex, "q"), qKnob);
+    dynSidechainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        apvts, Params::bandParamID(bandIndex, "dynSidechainBlend"), dynSidechainSlider);
+}
+
+void PlaymakersEQAudioProcessorEditor::applySoloToSelection(bool soloEnabled)
+{
+    auto bands = analyzer.getSelectedBandIndices();
+    if (bands.isEmpty())
+        return;
+
+    if (soloEnabled)
+    {
+        for (int i = 0; i < Params::numBands; ++i)
+        {
+            if (bands.contains(i))
+                continue;
+            if (auto* p = eqProcessor.apvts.getParameter(Params::bandParamID(i, "solo")))
+                p->setValueNotifyingHost(0.0f);
+        }
+    }
+
+    for (auto band : bands)
+    {
+        if (auto* p = eqProcessor.apvts.getParameter(Params::bandParamID(band, "solo")))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(soloEnabled ? 1.0f : 0.0f);
+            p->endChangeGesture();
+        }
+    }
+}
+
+void PlaymakersEQAudioProcessorEditor::applyAutoThresholdCaptureToSelection()
+{
+    const auto bands = analyzer.getSelectedBandIndices();
+    if (bands.isEmpty())
+        return;
+
+    for (auto band : bands)
+    {
+        if (auto* p = dynamic_cast<juce::AudioParameterFloat*>(
+                eqProcessor.apvts.getParameter(Params::bandParamID(band, "dynThreshold"))))
+        {
+            const float level = eqProcessor.getDynDetectionMeterDb(band);
+            if (!std::isfinite(level) || level <= -95.0f)
+                continue;
+
+            const float value = p->getNormalisableRange().snapToLegalValue(level);
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(p->convertTo0to1(value));
+            p->endChangeGesture();
+        }
+    }
+    refreshInspector();
+}
+
+void PlaymakersEQAudioProcessorEditor::updateDynRangeLabelForBand(int bandIndex)
+{
+    if (bandIndex < 0)
+        return;
+    const auto rangeDb = eqProcessor.apvts.getRawParameterValue(Params::bandParamID(bandIndex, "dynRange"))->load();
+    dynRangeLabel.setText(rangeDb >= 0.0f ? "Expand" : "Compress", juce::dontSendNotification);
 }
 
 void PlaymakersEQAudioProcessorEditor::applyTypeToSelection(int typeIndex)
@@ -251,13 +526,23 @@ void PlaymakersEQAudioProcessorEditor::refreshInspector()
     inspectorTitle.setVisible(hasSelection);
     freqCaption.setVisible(hasSelection);
     gainCaption.setVisible(hasSelection);
-    qCaption.setVisible(hasSelection);
+    qKnobLabel.setVisible(hasSelection);
+    qKnob.setVisible(hasSelection);
     freqValueLabel.setVisible(hasSelection);
     gainValueLabel.setVisible(hasSelection);
-    qValueLabel.setVisible(hasSelection);
     typeLabel.setVisible(hasSelection);
     typeBox.setVisible(hasSelection);
     removeButton.setVisible(hasSelection);
+    bandOptionsLabel.setVisible(hasSelection);
+    bandEnabledButton.setVisible(hasSelection);
+    bandSoloButton.setVisible(hasSelection);
+    slopeLabel.setVisible(false);
+    slopeSlider.setVisible(false);
+    brickwallButton.setVisible(false);
+    stereoLabel.setVisible(hasSelection);
+    stereoModeBox.setVisible(hasSelection);
+    balanceLabel.setVisible(hasSelection);
+    balanceSlider.setVisible(hasSelection);
     dynSectionLabel.setVisible(hasSelection);
     dynEnableButton.setVisible(hasSelection);
 
@@ -268,6 +553,12 @@ void PlaymakersEQAudioProcessorEditor::refreshInspector()
             s->setVisible(false);
         for (auto* l : { &dynThresholdLabel, &dynRangeLabel, &dynRatioLabel, &dynAttackLabel, &dynReleaseLabel })
             l->setVisible(false);
+        dynThresholdAutoButton.setVisible(false);
+        dynAutoThresholdButton.setVisible(false);
+        dynSidechainLabel.setVisible(false);
+        dynSidechainSlider.setVisible(false);
+        bandOptionsBounds = {};
+        qKnob.setEnabled(false);
         dynSectionBounds = {};
         for (auto& c : metricCardBounds) c = {};
         updatingInspector = false;
@@ -303,14 +594,46 @@ void PlaymakersEQAudioProcessorEditor::refreshInspector()
     dynEnableButton.setButtonText(canDyn ? "On" : "N/A");
     dynSectionLabel.setText(canDyn ? "DYNAMICS" : "DYNAMICS (N/A)", juce::dontSendNotification);
 
+    const bool canSlope = Params::typeSupportsSlope(type);
+    slopeLabel.setVisible(hasSelection && canSlope);
+    slopeSlider.setVisible(hasSelection && canSlope);
+    slopeSlider.setEnabled(hasSelection && canSlope);
+    brickwallButton.setVisible(hasSelection && canSlope);
+    brickwallButton.setEnabled(hasSelection && canSlope);
+
+    const bool bandOn = eqProcessor.apvts.getRawParameterValue(Params::bandParamID(primary, "enabled"))->load() >= 0.5f;
+    bandEnabledButton.setEnabled(hasSelection);
+    bandSoloButton.setEnabled(hasSelection && bandOn);
+    stereoModeBox.setEnabled(hasSelection);
+    balanceSlider.setEnabled(hasSelection);
+
+    bandEnabledButton.setToggleState(bandOn, juce::dontSendNotification);
+
+    const bool soloOn = eqProcessor.apvts.getRawParameterValue(Params::bandParamID(primary, "solo"))->load() >= 0.5f;
+    bandSoloButton.setToggleState(soloOn, juce::dontSendNotification);
+
+    qKnob.setEnabled(hasSelection && bandOn);
+    qValueLabel.setVisible(hasSelection);
+
     const bool showDynSliders = canDyn && dynOn;
+    const bool autoTrack = eqProcessor.apvts.getRawParameterValue(Params::bandParamID(primary, "dynAutoThreshold"))->load() >= 0.5f;
+    const bool showSidechain = canDyn && hasSelection;
     for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
     {
         s->setVisible(showDynSliders);
         s->setEnabled(showDynSliders);
     }
+    dynThresholdSlider.setEnabled(showDynSliders && !autoTrack);
+    dynThresholdAutoButton.setVisible(showDynSliders);
+    dynThresholdAutoButton.setEnabled(showDynSliders);
+    dynAutoThresholdButton.setVisible(showDynSliders);
+    dynAutoThresholdButton.setEnabled(showDynSliders);
     for (auto* l : { &dynThresholdLabel, &dynRangeLabel, &dynRatioLabel, &dynAttackLabel, &dynReleaseLabel })
         l->setVisible(showDynSliders);
+    updateDynRangeLabelForBand(primary);
+    dynSidechainLabel.setVisible(showSidechain);
+    dynSidechainSlider.setVisible(showSidechain);
+    dynSidechainSlider.setEnabled(showSidechain);
 
     updatingInspector = false;
     applyBandAccentToInspector(primary);
@@ -349,6 +672,17 @@ void PlaymakersEQAudioProcessorEditor::timerCallback()
 
     if (wantDynSliders != dynThresholdSlider.isVisible())
         refreshInspector();
+
+    if (primary >= 0)
+    {
+        const auto type = static_cast<Params::FilterType>(
+            (int) eqProcessor.apvts.getRawParameterValue(Params::bandParamID(primary, "type"))->load());
+        const bool wantSlope = Params::typeSupportsSlope(type);
+        if (wantSlope != slopeSlider.isVisible())
+            refreshInspector();
+        else if (dynThresholdSlider.isVisible())
+            updateDynRangeLabelForBand(primary);
+    }
 }
 
 bool PlaymakersEQAudioProcessorEditor::isEditingMetrics() const
@@ -405,8 +739,10 @@ void PlaymakersEQAudioProcessorEditor::applyThemeToButtons()
     removeButton.getProperties().set("pmAccent", true);
     lookAndFeel.setTheme(themeManager.current());
 
-    for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
-        s->setTextBoxStyle(juce::Slider::TextBoxRight, false, 56, 22);
+    for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider, &dynSidechainSlider, &slopeSlider, &outputGainSlider })
+        s->setTextBoxStyle(juce::Slider::TextBoxRight, false, 44, 20);
+    qKnob.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    balanceSlider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
 }
 
 void PlaymakersEQAudioProcessorEditor::applyThemeToInspector()
@@ -441,17 +777,26 @@ void PlaymakersEQAudioProcessorEditor::applyThemeToInspector()
     prepCaption(gainCaption);
     prepCaption(qCaption);
     prepCaption(typeLabel);
+    prepCaption(bandOptionsLabel);
+    prepCaption(slopeLabel);
+    prepCaption(stereoLabel);
+    prepCaption(balanceLabel);
     prepCaption(dynSectionLabel);
+    prepCaption(displayRangeLabel);
     prep(freqValueLabel, 15.0f, true);
     prep(gainValueLabel, 15.0f, true);
     prep(qValueLabel, 15.0f, true);
-    prep(emptyHint, 12.0f, false);
+    prep(emptyHint, 11.0f, false);
+    emptyHint.setJustificationType(juce::Justification::centredLeft);
     prep(dynThresholdLabel, 11.0f, false);
     prep(dynRangeLabel, 11.0f, false);
     prep(dynRatioLabel, 11.0f, false);
     prep(dynAttackLabel, 11.0f, false);
     prep(dynReleaseLabel, 11.0f, false);
 
+    prep(buildTag, 9.0f, false);
+    buildTag.setColour(juce::Label::textColourId, t.inkMuted.withAlpha(0.75f));
+    buildTag.setJustificationType(juce::Justification::centredRight);
     emptyHint.setColour(juce::Label::textColourId, t.inkMuted);
 
     typeBox.setColour(juce::ComboBox::textColourId, t.ink.withAlpha(0.95f));
@@ -459,14 +804,34 @@ void PlaymakersEQAudioProcessorEditor::applyThemeToInspector()
     typeBox.setColour(juce::ComboBox::outlineColourId, t.ink.withAlpha(0.22f));
     typeBox.setColour(juce::ComboBox::backgroundColourId,
                       t.isLight() ? t.softWhite.withAlpha(0.7f) : t.softWhite.withAlpha(0.04f));
+    stereoModeBox.setColour(juce::ComboBox::textColourId, t.ink.withAlpha(0.95f));
+    stereoModeBox.setColour(juce::ComboBox::arrowColourId, t.ink.withAlpha(0.7f));
+    stereoModeBox.setColour(juce::ComboBox::outlineColourId, t.ink.withAlpha(0.22f));
+    stereoModeBox.setColour(juce::ComboBox::backgroundColourId,
+                            t.isLight() ? t.softWhite.withAlpha(0.7f) : t.softWhite.withAlpha(0.04f));
+    displayRangeBox.setColour(juce::ComboBox::textColourId, t.ink.withAlpha(0.95f));
+    displayRangeBox.setColour(juce::ComboBox::arrowColourId, t.ink.withAlpha(0.7f));
+    displayRangeBox.setColour(juce::ComboBox::outlineColourId, t.ink.withAlpha(0.22f));
+    displayRangeBox.setColour(juce::ComboBox::backgroundColourId,
+                              t.isLight() ? t.softWhite.withAlpha(0.7f) : t.softWhite.withAlpha(0.04f));
+    specSpanBox.setColour(juce::ComboBox::textColourId, t.ink.withAlpha(0.95f));
+    specSpanBox.setColour(juce::ComboBox::arrowColourId, t.ink.withAlpha(0.7f));
+    specSpanBox.setColour(juce::ComboBox::outlineColourId, t.ink.withAlpha(0.22f));
+    specSpanBox.setColour(juce::ComboBox::backgroundColourId,
+                          t.isLight() ? t.softWhite.withAlpha(0.7f) : t.softWhite.withAlpha(0.04f));
+    prepCaption(specSpanLabel);
+    prepCaption(outputGainLabel);
 
-    for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
+    for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider, &dynSidechainSlider, &slopeSlider, &outputGainSlider })
     {
         s->setColour(juce::Slider::textBoxTextColourId, t.ink.withAlpha(0.95f));
         s->setColour(juce::Slider::textBoxBackgroundColourId,
                      t.isLight() ? t.softWhite.withAlpha(0.85f) : t.softWhite.withAlpha(0.04f));
         s->setColour(juce::Slider::textBoxOutlineColourId, t.ink.withAlpha(0.18f));
     }
+    qKnob.setColour(juce::Slider::textBoxTextColourId, t.ink.withAlpha(0.95f));
+    qKnob.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
+    qKnob.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
 
     applyBandAccentToInspector(analyzer.getPrimarySelectedBand());
 }
@@ -493,15 +858,24 @@ void PlaymakersEQAudioProcessorEditor::applyBandAccentToInspector(int bandIndex)
     dynSectionLabel.setColour(juce::Label::textColourId, dynColour.withAlpha(dynOn ? 1.0f : 0.7f));
     removeButton.getProperties().set("pmAccentColour", colourStr);
     typeBox.getProperties().set("pmAccentColour", colourStr);
+    stereoModeBox.getProperties().set("pmAccentColour", colourStr);
+    bandSoloButton.getProperties().set("pmAccentColour", colourStr);
+    bandEnabledButton.getProperties().set("pmAccentColour", colourStr);
+    brickwallButton.getProperties().set("pmAccentColour", colourStr);
     dynEnableButton.getProperties().set("pmAccentColour", dynColourStr);
 
-    for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
+    for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider, &dynSidechainSlider, &slopeSlider, &balanceSlider })
         s->getProperties().set("pmAccentColour", dynColourStr);
+    qKnob.getProperties().set("pmAccentColour", colourStr);
 
     removeButton.repaint();
+    bandEnabledButton.repaint();
+    bandSoloButton.repaint();
+    brickwallButton.repaint();
     dynEnableButton.repaint();
     typeBox.repaint();
-    for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
+    stereoModeBox.repaint();
+    for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider, &dynSidechainSlider, &slopeSlider, &balanceSlider, &qKnob })
         s->repaint();
 }
 
@@ -525,6 +899,16 @@ bool PlaymakersEQAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     {
         analyzer.deleteSelectedBands();
         refreshInspector();
+        return true;
+    }
+    if ((key == juce::KeyPress('s', juce::ModifierKeys(), 0) || key == juce::KeyPress('S', juce::ModifierKeys(), 0))
+        && analyzer.getPrimarySelectedBand() >= 0)
+    {
+        const int band = analyzer.getPrimarySelectedBand();
+        const bool cur = eqProcessor.apvts.getRawParameterValue(Params::bandParamID(band, "solo"))->load() >= 0.5f;
+        applySoloToSelection(!cur);
+        refreshInspector();
+        analyzer.repaint();
         return true;
     }
     return false;
@@ -590,6 +974,22 @@ void PlaymakersEQAudioProcessorEditor::paint(juce::Graphics& g)
             g.drawRect(dynSectionBounds.toFloat(), dynOn ? 1.5f : 1.0f);
         }
     }
+
+    if (!analyzerSpecBarBounds.isEmpty())
+    {
+        g.setColour(t.isLight() ? t.softWhite.withAlpha(0.35f) : t.softWhite.withAlpha(0.03f));
+        g.fillRect(analyzerSpecBarBounds.toFloat());
+    }
+
+    if (eqProcessor.apvts.getRawParameterValue("pluginBypass")->load() >= 0.5f)
+    {
+        auto graph = analyzer.getBounds().toFloat();
+        g.setColour(t.background.withAlpha(t.isLight() ? 0.25f : 0.32f));
+        g.fillRect(graph);
+        g.setColour(t.inkMuted.withAlpha(0.85f));
+        g.setFont(Brand::uiFont(13.0f, true));
+        g.drawText("BYPASS", graph, juce::Justification::centred, false);
+    }
 }
 
 void PlaymakersEQAudioProcessorEditor::resized()
@@ -609,6 +1009,15 @@ void PlaymakersEQAudioProcessorEditor::resized()
     placeHeaderBtn(undoButton, 60);
     placeHeaderBtn(redoButton, 60);
 
+    buildTag.setVisible(true);
+    buildTag.setBounds(header.getRight() - 62, header.getY() + 4, 58, 14);
+
+    auto rangeArea = header.removeFromRight(128);
+    header.removeFromRight(8);
+    displayRangeLabel.setBounds(rangeArea.removeFromLeft(40).withHeight(26).withY(header.getY() + (header.getHeight() - 26) / 2));
+    displayRangeBox.setBounds(rangeArea.withHeight(26).withY(header.getY() + (header.getHeight() - 26) / 2));
+    displayRangeLabel.setJustificationType(juce::Justification::centredRight);
+
     auto presetArea = header.removeFromLeft(juce::jmin(280, header.getWidth() - 200));
     presetBrowser.setBounds(presetArea.withHeight(26).withY(header.getY() + (header.getHeight() - 26) / 2));
     header.removeFromLeft(8);
@@ -625,11 +1034,35 @@ void PlaymakersEQAudioProcessorEditor::resized()
     placeRight(abButton, 34);
 
     const bool hasBand = analyzer.getPrimarySelectedBand() >= 0;
-    const int inspectorH = hasBand ? 152 : 40;
+    const bool dynExpanded = hasBand && (dynThresholdSlider.isVisible() || dynSidechainSlider.isVisible());
+    const int bandOptionsH = hasBand ? 34 : 0;
+    const int inspectorH = !hasBand ? 56 : (dynExpanded ? (dynThresholdSlider.isVisible() ? 196 : 118) : 156) + bandOptionsH;
     inspectorBounds = bounds.removeFromBottom(inspectorH);
-    analyzer.setBounds(bounds.reduced(8, 4));
+
+    auto graphArea = bounds.reduced(8, 4);
+    analyzerSpecBarBounds = graphArea.removeFromTop(26);
+    analyzer.setBounds(graphArea);
+
+    auto specBar = analyzerSpecBarBounds.reduced(4, 2);
+
+    auto outArea = specBar.removeFromRight(210);
+    pluginBypassButton.setBounds(outArea.removeFromRight(62).withHeight(22));
+    outArea.removeFromRight(6);
+    outputGainSlider.setBounds(outArea.removeFromRight(118).withHeight(22));
+    outArea.removeFromRight(4);
+    outputGainLabel.setBounds(outArea.removeFromRight(24).withHeight(22));
+
+    specPreButton.setBounds(specBar.removeFromLeft(44).withHeight(22));
+    specBar.removeFromLeft(4);
+    specPostButton.setBounds(specBar.removeFromLeft(48).withHeight(22));
+    specBar.removeFromLeft(8);
+    specFreezeButton.setBounds(specBar.removeFromLeft(58).withHeight(22));
+    specBar.removeFromLeft(12);
+    specSpanLabel.setBounds(specBar.removeFromLeft(32).withHeight(22));
+    specSpanBox.setBounds(specBar.removeFromLeft(72).withHeight(22));
 
     for (auto& c : metricCardBounds) c = {};
+    bandOptionsBounds = {};
     dynSectionBounds = {};
 
     auto panel = inspectorBounds.reduced(12, 10);
@@ -639,7 +1072,7 @@ void PlaymakersEQAudioProcessorEditor::resized()
         return;
     }
 
-    auto top = panel.removeFromTop(48);
+    auto top = panel.removeFromTop(56);
     inspectorTitle.setBounds(top.removeFromLeft(92).withTrimmedTop(14));
     top.removeFromLeft(8);
 
@@ -652,25 +1085,57 @@ void PlaymakersEQAudioProcessorEditor::resized()
     typeLabel.setBounds(typeCol.removeFromTop(12));
     typeBox.setBounds(typeCol.withHeight(28));
 
-    const int gaps = 8 * 2;
-    const int cardW = juce::jmax(110, (top.getWidth() - gaps) / 3);
+    const int gaps = 8;
+    const int cardW = juce::jmax(100, (top.getWidth() - gaps) / 3);
     auto placeMetric = [&](int index, juce::Label& caption, juce::Label& value)
     {
         auto card = top.removeFromLeft(cardW);
         if (index < 2)
             top.removeFromLeft(8);
         metricCardBounds[index] = card;
-        auto inner = card.reduced(12, 6);
+        auto inner = card.reduced(10, 4);
         caption.setBounds(inner.removeFromTop(12));
         value.setBounds(inner);
         value.setJustificationType(juce::Justification::centredLeft);
     };
     placeMetric(0, freqCaption, freqValueLabel);
     placeMetric(1, gainCaption, gainValueLabel);
-    placeMetric(2, qCaption, qValueLabel);
+    auto qCard = top;
+    metricCardBounds[2] = qCard;
+    auto qInner = qCard.reduced(6, 2);
+    qKnobLabel.setBounds(qInner.removeFromTop(12));
+    auto qNumRow = qInner.removeFromBottom(14);
+    qValueLabel.setBounds(qNumRow);
+    qValueLabel.setVisible(hasBand);
+    qValueLabel.setJustificationType(juce::Justification::centred);
+    qKnob.setBounds(qInner);
 
-    panel.removeFromTop(8);
-    dynSectionBounds = panel.removeFromTop(dynThresholdSlider.isVisible() ? 66 : 32);
+    panel.removeFromTop(6);
+    bandOptionsBounds = panel.removeFromTop(28);
+    auto opt = bandOptionsBounds.reduced(0, 2);
+    bandOptionsLabel.setBounds(opt.removeFromLeft(36));
+    opt.removeFromLeft(4);
+    bandEnabledButton.setBounds(opt.removeFromLeft(58));
+    opt.removeFromLeft(8);
+    bandSoloButton.setBounds(opt.removeFromLeft(56));
+    opt.removeFromLeft(10);
+    if (slopeSlider.isVisible())
+    {
+        slopeLabel.setBounds(opt.removeFromLeft(36).withTrimmedTop(6));
+        slopeSlider.setBounds(opt.removeFromLeft(118));
+        opt.removeFromLeft(6);
+        brickwallButton.setBounds(opt.removeFromLeft(78));
+        opt.removeFromLeft(10);
+    }
+    stereoLabel.setBounds(opt.removeFromLeft(42).withTrimmedTop(6));
+    stereoModeBox.setBounds(opt.removeFromLeft(108).withHeight(24));
+    opt.removeFromLeft(8);
+    balanceLabel.setBounds(opt.removeFromLeft(22).withTrimmedTop(6));
+    balanceSlider.setBounds(opt.removeFromLeft(juce::jmax(60, opt.getWidth())));
+
+    panel.removeFromTop(4);
+    const bool dynOpen = dynThresholdSlider.isVisible();
+    dynSectionBounds = panel.removeFromTop(dynOpen ? 92 : (dynSidechainSlider.isVisible() ? 36 : 30));
     auto dynInner = dynSectionBounds.reduced(12, 8);
 
     auto dynHead = dynInner.removeFromTop(18);
@@ -680,18 +1145,41 @@ void PlaymakersEQAudioProcessorEditor::resized()
     if (dynThresholdSlider.isVisible())
     {
         dynInner.removeFromTop(6);
-        auto row = dynInner.removeFromTop(28);
+        auto row = dynInner.removeFromTop(26);
         const int slotW = row.getWidth() / 5;
         auto place = [&row, slotW](juce::Label& l, juce::Slider& s)
         {
-            auto slot = row.removeFromLeft(slotW).reduced(4, 0);
-            l.setBounds(slot.removeFromLeft(58).withTrimmedTop(6));
+            auto slot = row.removeFromLeft(slotW).reduced(3, 0);
+            l.setBounds(slot.removeFromLeft(52).withTrimmedTop(5));
             s.setBounds(slot);
         };
-        place(dynThresholdLabel, dynThresholdSlider);
+        {
+            auto slot = row.removeFromLeft(slotW).reduced(3, 0);
+            dynThresholdLabel.setBounds(slot.removeFromLeft(36).withTrimmedTop(5));
+            dynThresholdAutoButton.setBounds(slot.removeFromLeft(34).withHeight(20).withTrimmedTop(3));
+            dynAutoThresholdButton.setBounds(slot.removeFromLeft(42).withHeight(20).withTrimmedTop(3));
+            dynThresholdSlider.setBounds(slot);
+        }
         place(dynRangeLabel, dynRangeSlider);
         place(dynRatioLabel, dynRatioSlider);
         place(dynAttackLabel, dynAttackSlider);
         place(dynReleaseLabel, dynReleaseSlider);
+
+        dynInner.removeFromTop(4);
+        auto scRow = dynInner.removeFromTop(22);
+        dynSidechainLabel.setBounds(scRow.removeFromLeft(72).withTrimmedTop(4));
+        dynSidechainSlider.setBounds(scRow.reduced(0, 1));
+    }
+    else if (dynSidechainSlider.isVisible())
+    {
+        auto scRow = dynInner;
+        dynSidechainLabel.setBounds(scRow.removeFromLeft(72).withTrimmedTop(4));
+        dynSidechainSlider.setBounds(scRow.reduced(0, 1));
+    }
+
+    if (hasBand)
+    {
+        removeButton.toFront(false);
+        bandSoloButton.toFront(false);
     }
 }

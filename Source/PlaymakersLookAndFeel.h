@@ -207,6 +207,43 @@ public:
     {
         if (style != juce::Slider::LinearHorizontal && style != juce::Slider::LinearBar)
         {
+            if (style == juce::Slider::RotaryHorizontalVerticalDrag
+                || style == juce::Slider::RotaryVerticalDrag
+                || style == juce::Slider::RotaryHorizontalDrag)
+            {
+                juce::Colour accent = theme.signalOrange;
+                if (auto* c = slider.getProperties().getVarPointer("pmAccentColour"))
+                    if (c->isString())
+                        accent = juce::Colour::fromString(c->toString());
+
+                const auto bounds = juce::Rectangle<float>((float) x, (float) y, (float) width, (float) height).reduced(2.0f);
+                const float angle = juce::jmap((float) slider.getValue(), (float) slider.getMinimum(), (float) slider.getMaximum(),
+                                               juce::MathConstants<float>::pi * 1.15f,
+                                               juce::MathConstants<float>::pi * 2.85f);
+                const float cx = bounds.getCentreX();
+                const float cy = bounds.getCentreY();
+                const float r = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.42f;
+
+                g.setColour(theme.ink.withAlpha(theme.isLight() ? 0.10f : 0.12f));
+                juce::Path track;
+                track.addCentredArc(cx, cy, r, r, 0.0f,
+                                      juce::MathConstants<float>::pi * 1.15f,
+                                      juce::MathConstants<float>::pi * 2.85f, true);
+                g.strokePath(track, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved,
+                                                          juce::PathStrokeType::rounded));
+
+                g.setColour(accent.withAlpha(slider.isEnabled() ? 0.95f : 0.35f));
+                juce::Path valueArc;
+                valueArc.addCentredArc(cx, cy, r, r, 0.0f,
+                                       juce::MathConstants<float>::pi * 1.15f, angle, true);
+                g.strokePath(valueArc, juce::PathStrokeType(2.2f, juce::PathStrokeType::curved,
+                                                            juce::PathStrokeType::rounded));
+
+                g.setColour(accent);
+                g.fillEllipse(cx + std::cos(angle) * r - 2.5f, cy + std::sin(angle) * r - 2.5f, 5.0f, 5.0f);
+                return;
+            }
+
             LookAndFeel_V4::drawLinearSlider(g, x, y, width, height, sliderPos, 0, 0, style, slider);
             return;
         }

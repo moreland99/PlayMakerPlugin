@@ -2,6 +2,7 @@
 
 #include <juce_dsp/juce_dsp.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <atomic>
 #include "Params.h"
 #include "FilterBand.h"
 #include "Theme.h"
@@ -65,9 +66,11 @@ class SpectrumAnalyzerComponent : public juce::Component, private juce::Timer
 {
 public:
     SpectrumAnalyzerComponent(juce::AudioProcessorValueTreeState& stateToRead,
-                               AnalyzerDataProvider& analyzerToRead,
+                               AnalyzerDataProvider& postAnalyzerToRead,
+                               AnalyzerDataProvider& preAnalyzerToRead,
                                double& sampleRateToRead,
-                               const Theme& themeToUse);
+                               const Theme& themeToUse,
+                               std::array<std::atomic<float>, Params::numBands>* dynOffsetsToRead);
     ~SpectrumAnalyzerComponent() override;
 
     void paint(juce::Graphics& g) override;
@@ -83,11 +86,25 @@ public:
     void deleteSelectedBands();
     std::function<void()> onSelectionChanged;
 
+    void setDisplayRangeHalfDb(float halfRangeDb);
+    float getDisplayRangeHalfDb() const { return displayRangeHalfDb; }
+
+    void setShowPreSpectrum(bool show);
+    void setShowPostSpectrum(bool show);
+    void setSpectrumFrozen(bool frozen);
+    void setSpectrumSpanDb(float spanDb);
+
+    bool getShowPreSpectrum() const { return showPreSpectrum; }
+    bool getShowPostSpectrum() const { return showPostSpectrum; }
+    bool isSpectrumFrozen() const { return spectrumFrozen; }
+    float getSpectrumSpanDb() const { return spectrumSpanDb; }
+
 private:
     enum class Gesture
     {
         none,
         dragBand,
+        dragBandQ,
         createDrag,
         marquee
     };
@@ -101,6 +118,14 @@ private:
 
     void drawGrid(juce::Graphics& g, juce::Rectangle<float> bounds);
     void drawSpectrum(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void drawSpectrumTrace(juce::Graphics& g, juce::Rectangle<float> bounds,
+                           const std::array<float, AnalyzerDataProvider::fftSize / 2>& magnitudesDb,
+                           juce::Colour stroke, juce::Colour fill, float fillAlpha);
+    void processSpectrumBlock(bool gotFft, const std::array<float, AnalyzerDataProvider::fftSize / 2>& latest,
+                              std::array<float, AnalyzerDataProvider::fftSize / 2>& smoothed,
+                              std::array<float, AnalyzerDataProvider::fftSize / 2>& display,
+                              bool& initialized);
+    void drawCombinedCurve(juce::Graphics& g, juce::Rectangle<float> bounds);
     void drawBandCurves(juce::Graphics& g, juce::Rectangle<float> bounds);
     void drawBandHandles(juce::Graphics& g, juce::Rectangle<float> bounds);
     void drawCreatePreview(juce::Graphics& g, juce::Rectangle<float> bounds);
@@ -121,6 +146,7 @@ private:
     int hitTestBand(juce::Point<float> pos, juce::Rectangle<float> bounds) const;
     int findFirstDisabledBand() const;
     int countEnabledBands() const;
+    bool bandAudibleInChain(int bandIndex) const;
     static Params::FilterType defaultTypeForFrequency(float freqHz);
 
     void setBandEnabled(int bandIndex, bool enabled);
@@ -142,13 +168,24 @@ private:
     void deleteBand(int bandIndex);
 
     juce::AudioProcessorValueTreeState& apvts;
-    AnalyzerDataProvider& analyzer;
+    AnalyzerDataProvider& postAnalyzer;
+    AnalyzerDataProvider& preAnalyzer;
     double& sampleRate;
     const Theme& theme;
-    std::array<float, AnalyzerDataProvider::fftSize / 2> latestMagnitudesDb {};
-    std::array<float, AnalyzerDataProvider::fftSize / 2> smoothedMagnitudesDb {};
-    std::array<float, AnalyzerDataProvider::fftSize / 2> displayMagnitudesDb {};
-    bool spectrumInitialized = false;
+    std::array<std::atomic<float>, Params::numBands>* dynOffsets = nullptr;
+    std::array<float, Params::numBands> smoothedDynOffsetDb {};
+    std::array<float, AnalyzerDataProvider::fftSize / 2> latestPostMagnitudesDb {};
+    std::array<float, AnalyzerDataProvider::fftSize / 2> smoothedPostMagnitudesDb {};
+    std::array<float, AnalyzerDataProvider::fftSize / 2> displayPostMagnitudesDb {};
+    std::array<float, AnalyzerDataProvider::fftSize / 2> latestPreMagnitudesDb {};
+    std::array<float, AnalyzerDataProvider::fftSize / 2> smoothedPreMagnitudesDb {};
+    std::array<float, AnalyzerDataProvider::fftSize / 2> displayPreMagnitudesDb {};
+    bool postSpectrumInitialized = false;
+    bool preSpectrumInitialized = false;
+    bool showPreSpectrum = false;
+    bool showPostSpectrum = true;
+    bool spectrumFrozen = false;
+    float spectrumSpanDb = 90.0f;
 
     juce::SparseSet<int> selectedBands;
     Gesture gesture = Gesture::none;
@@ -159,19 +196,17 @@ private:
     float dragStartGain = 0.0f;
     std::array<float, Params::numBands> dragStartFreqs {};
     std::array<float, Params::numBands> dragStartGains {};
+    std::array<float, Params::numBands> dragStartQs {};
     bool createPreviewActive = false;
     float createPreviewFreq = 1000.0f;
     float createPreviewGain = 0.0f;
     Params::FilterType createPreviewType = Params::FilterType::bell;
 
-    // Spectrum is atmosphere under the curves — soft, quiet, never the hero.
-    static constexpr float spectrumMinDb = -72.0f;
-    static constexpr float spectrumMaxDb = -6.0f;
-    static constexpr float spectrumHeightRatio = 0.48f;
+    float displayRangeHalfDb = 24.0f;
+    float curveMinDb = -24.0f;
+    float curveMaxDb = 24.0f;
     static constexpr float spectrumAttack = 0.22f;
     static constexpr float spectrumRelease = 0.08f;
-    static constexpr float curveMinDb = -24.0f;
-    static constexpr float curveMaxDb = 24.0f;
     static constexpr float handleHitRadiusPx = 14.0f;
     static constexpr float createDragThresholdPx = 4.0f;
     static constexpr float lowZoneMaxHz = 250.0f;

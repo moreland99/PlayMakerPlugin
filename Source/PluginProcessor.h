@@ -45,6 +45,7 @@ public:
     PresetManager presetManager;
 
     AnalyzerDataProvider& getPostAnalyzer() { return postAnalyzer; }
+    AnalyzerDataProvider& getPreAnalyzer() { return preAnalyzer; }
     double& getSampleRateRef() { return currentSampleRate; }
 
     // A/B comparison — message thread only.
@@ -52,14 +53,22 @@ public:
     void copyCurrentToOtherSlot();
     bool isOnSlotA() const { return onSlotA; }
 
+    float getDynDetectionMeterDb(int bandIndex) const;
+
+    std::array<std::atomic<float>, Params::numBands> dynDisplayOffsetDb {};
+
 private:
     void timerCallback() override;
     juce::uint64 computeParamsHash() const;
     void rebuildLinearPhase(Params::PhaseMode mode);
     int firTapsForMode(Params::PhaseMode mode, int quality) const;
     bool bandUsesFIR(int bandIndex) const;
+    bool anyBandSoloActive() const;
+    bool bandContributesToAudio(int bandIndex) const;
     void updateBandCoefficients(int bandIndex, float dynGainOffsetDb, int numSamplesForSmoothing);
     void processStereoBand(int bandIndex, float* leftData, float* rightData, int numSamples);
+    void applyOutputGain(float* leftData, float* rightData, int numSamples);
+    void pushPostAnalyzerFromBus(float* leftData, float* rightData, int numSamples);
 
     struct BandSmoothers
     {
@@ -77,11 +86,14 @@ private:
 
     juce::AudioBuffer<float> scratchPreL, scratchPreR, scratchA, scratchB;
     AnalyzerDataProvider postAnalyzer;
+    AnalyzerDataProvider preAnalyzer;
     double currentSampleRate = 0.0;
     std::vector<float> monoScratch, preMonoScratch, scMonoScratch, detectorScratch;
 
     juce::ValueTree slotA, slotB;
     bool onSlotA = true;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> outputGainLinear { 1.0f };
+    std::array<std::atomic<float>, Params::numBands> dynDetectionMeterDb {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PlaymakersEQAudioProcessor)
 };

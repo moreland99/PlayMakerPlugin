@@ -95,6 +95,7 @@ inline juce::String bandParamID(int bandIndex, const juce::String& suffix)
 struct BandParamPointers
 {
     std::atomic<float>* enabled = nullptr;
+    std::atomic<float>* solo = nullptr;
     std::atomic<float>* type = nullptr;
     std::atomic<float>* freq = nullptr;
     std::atomic<float>* gain = nullptr;
@@ -105,6 +106,7 @@ struct BandParamPointers
     std::atomic<float>* brickwall = nullptr;
     std::atomic<float>* dynEnabled = nullptr;
     std::atomic<float>* dynThreshold = nullptr;
+    std::atomic<float>* dynAutoThreshold = nullptr;
     std::atomic<float>* dynRange = nullptr;
     std::atomic<float>* dynRatio = nullptr;
     std::atomic<float>* dynAttack = nullptr;
@@ -117,6 +119,8 @@ struct GlobalParamPointers
 {
     std::atomic<float>* phaseMode = nullptr;
     std::atomic<float>* linearQuality = nullptr;
+    std::atomic<float>* outputGain = nullptr;
+    std::atomic<float>* pluginBypass = nullptr;
 };
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
