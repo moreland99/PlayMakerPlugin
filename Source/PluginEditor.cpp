@@ -216,9 +216,14 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     pluginBypassButton.setTooltip("Pass audio through without EQ (output gain still applies)");
     pluginBypassButton.onClick = [this] { repaint(); };
 
-    buildTag.setText("UI Aug 10g", juce::dontSendNotification);
+    buildTag.setText("UI Aug 11a", juce::dontSendNotification);
     buildTag.setInterceptsMouseClicks(false, false);
-    buildTag.setTooltip("Build marker: if missing, remove this plugin and insert again (don't just rescan)");
+    buildTag.setTooltip("Dev build marker — remove plugin instance and re-insert if UI looks stale");
+#if JUCE_DEBUG
+    buildTag.setVisible(true);
+#else
+    buildTag.setVisible(false);
+#endif
 
     auto wireMetricEdit = [this](juce::Label& label, const char* suffix)
     {
@@ -478,7 +483,8 @@ void PlaymakersEQAudioProcessorEditor::updateDynRangeLabelForBand(int bandIndex)
     if (bandIndex < 0)
         return;
     const auto rangeDb = eqProcessor.apvts.getRawParameterValue(Params::bandParamID(bandIndex, "dynRange"))->load();
-    dynRangeLabel.setText(rangeDb >= 0.0f ? "Expand" : "Compress", juce::dontSendNotification);
+    dynRangeLabel.setText(rangeDb >= 0.0f ? "Exp" : "Comp", juce::dontSendNotification);
+    dynRangeLabel.setTooltip(rangeDb >= 0.0f ? "Expand range (dB)" : "Compress range (dB)");
 }
 
 void PlaymakersEQAudioProcessorEditor::applyTypeToSelection(int typeIndex)
@@ -770,6 +776,7 @@ void PlaymakersEQAudioProcessorEditor::applyThemeToInspector()
         l.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
         l.setFont(Brand::titleFont(9.0f));
         l.setJustificationType(juce::Justification::centredLeft);
+        l.setMinimumHorizontalScale(0.75f);
     };
 
     prep(inspectorTitle, 12.0f, true);
@@ -789,10 +796,16 @@ void PlaymakersEQAudioProcessorEditor::applyThemeToInspector()
     prep(emptyHint, 11.0f, false);
     emptyHint.setJustificationType(juce::Justification::centredLeft);
     prep(dynThresholdLabel, 11.0f, false);
+    dynThresholdLabel.setTooltip("Threshold (dB)");
     prep(dynRangeLabel, 11.0f, false);
     prep(dynRatioLabel, 11.0f, false);
     prep(dynAttackLabel, 11.0f, false);
     prep(dynReleaseLabel, 11.0f, false);
+    dynRatioLabel.setTooltip("Ratio");
+    dynAttackLabel.setTooltip("Attack (ms)");
+    dynReleaseLabel.setTooltip("Release (ms)");
+    slopeLabel.setTooltip("Cut slope (dB/oct)");
+    displayRangeLabel.setTooltip("Graph vertical scale");
 
     prep(buildTag, 9.0f, false);
     buildTag.setColour(juce::Label::textColourId, t.inkMuted.withAlpha(0.75f));
@@ -994,7 +1007,8 @@ void PlaymakersEQAudioProcessorEditor::paint(juce::Graphics& g)
 
 void PlaymakersEQAudioProcessorEditor::resized()
 {
-    auto bounds = getLocalBounds();
+    const auto fullBounds = getLocalBounds();
+    auto bounds = fullBounds;
     auto header = bounds.removeFromTop(44).reduced(12, 8);
 
     brandLockupBounds = header.removeFromLeft(158);
@@ -1009,19 +1023,6 @@ void PlaymakersEQAudioProcessorEditor::resized()
     placeHeaderBtn(undoButton, 60);
     placeHeaderBtn(redoButton, 60);
 
-    buildTag.setVisible(true);
-    buildTag.setBounds(header.getRight() - 62, header.getY() + 4, 58, 14);
-
-    auto rangeArea = header.removeFromRight(128);
-    header.removeFromRight(8);
-    displayRangeLabel.setBounds(rangeArea.removeFromLeft(40).withHeight(26).withY(header.getY() + (header.getHeight() - 26) / 2));
-    displayRangeBox.setBounds(rangeArea.withHeight(26).withY(header.getY() + (header.getHeight() - 26) / 2));
-    displayRangeLabel.setJustificationType(juce::Justification::centredRight);
-
-    auto presetArea = header.removeFromLeft(juce::jmin(280, header.getWidth() - 200));
-    presetBrowser.setBounds(presetArea.withHeight(26).withY(header.getY() + (header.getHeight() - 26) / 2));
-    header.removeFromLeft(8);
-
     auto placeRight = [&header](juce::TextButton& b, int w)
     {
         auto area = header.removeFromRight(w);
@@ -1032,6 +1033,22 @@ void PlaymakersEQAudioProcessorEditor::resized()
     placeRight(expandButton, 72);
     placeRight(copyButton, 58);
     placeRight(abButton, 34);
+
+    auto rangeArea = header.removeFromRight(138);
+    header.removeFromRight(6);
+    displayRangeLabel.setBounds(rangeArea.removeFromLeft(46).withHeight(26).withY(header.getY() + (header.getHeight() - 26) / 2));
+    displayRangeBox.setBounds(rangeArea.withHeight(26).withY(header.getY() + (header.getHeight() - 26) / 2));
+    displayRangeLabel.setJustificationType(juce::Justification::centredRight);
+
+    auto presetArea = header;
+    presetBrowser.setBounds(presetArea.withHeight(26).withY(header.getY() + (header.getHeight() - 26) / 2));
+
+#if JUCE_DEBUG
+    buildTag.setVisible(true);
+    buildTag.setBounds(fullBounds.getRight() - 66, fullBounds.getY() + 3, 62, 12);
+#else
+    buildTag.setVisible(false);
+#endif
 
     const bool hasBand = analyzer.getPrimarySelectedBand() >= 0;
     const bool dynExpanded = hasBand && (dynThresholdSlider.isVisible() || dynSidechainSlider.isVisible());
@@ -1121,13 +1138,13 @@ void PlaymakersEQAudioProcessorEditor::resized()
     opt.removeFromLeft(10);
     if (slopeSlider.isVisible())
     {
-        slopeLabel.setBounds(opt.removeFromLeft(36).withTrimmedTop(6));
-        slopeSlider.setBounds(opt.removeFromLeft(118));
+        slopeLabel.setBounds(opt.removeFromLeft(44).withTrimmedTop(6));
+        slopeSlider.setBounds(opt.removeFromLeft(112));
         opt.removeFromLeft(6);
-        brickwallButton.setBounds(opt.removeFromLeft(78));
+        brickwallButton.setBounds(opt.removeFromLeft(82));
         opt.removeFromLeft(10);
     }
-    stereoLabel.setBounds(opt.removeFromLeft(42).withTrimmedTop(6));
+    stereoLabel.setBounds(opt.removeFromLeft(46).withTrimmedTop(6));
     stereoModeBox.setBounds(opt.removeFromLeft(108).withHeight(24));
     opt.removeFromLeft(8);
     balanceLabel.setBounds(opt.removeFromLeft(22).withTrimmedTop(6));
@@ -1146,18 +1163,18 @@ void PlaymakersEQAudioProcessorEditor::resized()
     {
         dynInner.removeFromTop(6);
         auto row = dynInner.removeFromTop(26);
-        const int slotW = row.getWidth() / 5;
+        const int slotW = juce::jmax(72, row.getWidth() / 6);
         auto place = [&row, slotW](juce::Label& l, juce::Slider& s)
         {
             auto slot = row.removeFromLeft(slotW).reduced(3, 0);
-            l.setBounds(slot.removeFromLeft(52).withTrimmedTop(5));
+            l.setBounds(slot.removeFromLeft(44).withTrimmedTop(5));
             s.setBounds(slot);
         };
         {
-            auto slot = row.removeFromLeft(slotW).reduced(3, 0);
-            dynThresholdLabel.setBounds(slot.removeFromLeft(36).withTrimmedTop(5));
-            dynThresholdAutoButton.setBounds(slot.removeFromLeft(34).withHeight(20).withTrimmedTop(3));
-            dynAutoThresholdButton.setBounds(slot.removeFromLeft(42).withHeight(20).withTrimmedTop(3));
+            auto slot = row.removeFromLeft(slotW * 2).reduced(3, 0);
+            dynThresholdLabel.setBounds(slot.removeFromLeft(44).withTrimmedTop(5));
+            dynThresholdAutoButton.setBounds(slot.removeFromLeft(36).withHeight(20).withTrimmedTop(3));
+            dynAutoThresholdButton.setBounds(slot.removeFromLeft(44).withHeight(20).withTrimmedTop(3));
             dynThresholdSlider.setBounds(slot);
         }
         place(dynRangeLabel, dynRangeSlider);
