@@ -8,7 +8,7 @@ juce_add_plugin(PlaymakersEQ
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD TRUE
     VST3_CATEGORIES "Fx" "EQ"
     AU_MAIN_TYPE "kAudioUnitType_Effect"
@@ -36,6 +36,9 @@ target_sources(PlaymakersEQ
         PluginEditor.cpp
         Params.cpp
         SpectrumAnalyzer.cpp
+        PresetState.cpp
+        PresetManager.cpp
+        PresetBrowser.cpp
 )
 
 target_compile_definitions(PlaymakersEQ

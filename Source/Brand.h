@@ -120,7 +120,7 @@ inline void drawEmptyStateLockup(juce::Graphics& g, juce::Rectangle<float> bound
 
     g.setColour(hintColour);
     g.setFont(uiFont(12.0f));
-    g.drawText("Double-click to add a band",
+    g.drawText("Double-click empty space to add a band",
                bounds.withTrimmedTop(logoBounds.getBottom() - bounds.getY() + 10.0f).removeFromTop(18.0f),
                juce::Justification::centred, false);
 }

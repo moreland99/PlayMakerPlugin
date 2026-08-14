@@ -5,6 +5,7 @@
 #include "SpectrumAnalyzer.h"
 #include "Theme.h"
 #include "PlaymakersLookAndFeel.h"
+#include "PresetBrowser.h"
 
 class PlaymakersEQAudioProcessorEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
@@ -21,11 +22,16 @@ private:
     void applyThemeToButtons();
     void applyThemeToInspector();
     void applyBandAccentToInspector(int bandIndex);
+    void applyAnalyzerOptions();
+    void loadAnalyzerOptionsFromState();
     void refreshInspector();
     void bindInspectorToBand(int bandIndex);
     void clearInspectorBindings();
     void applyTypeToSelection(int typeIndex);
     void applyDynEnabledToSelection(bool enabled);
+    void applySoloToSelection(bool soloEnabled);
+    void applyAutoThresholdCaptureToSelection();
+    void updateDynRangeLabelForBand(int bandIndex);
     void commitMetricFromLabel(juce::Label& label, const char* paramSuffix);
     bool isEditingMetrics() const;
     static float parseFrequencyText(const juce::String& text);
@@ -39,6 +45,7 @@ private:
     juce::Rectangle<int> brandLockupBounds;
     juce::Rectangle<int> inspectorBounds;
     juce::Rectangle<int> metricCardBounds[3];
+    juce::Rectangle<int> bandOptionsBounds;
     juce::Rectangle<int> dynSectionBounds;
 
     juce::TextButton undoButton { "Undo" };
@@ -46,7 +53,8 @@ private:
     juce::TextButton abButton { "A" };
     juce::TextButton copyButton { "Copy" };
     juce::TextButton expandButton { "Expand" };
-    juce::TextButton themeButton { "Light" };
+    PresetBrowser presetBrowser;
+    juce::Label buildTag;
 
     bool expandedView = false;
     static constexpr int normalWidth = 1100;
@@ -66,6 +74,31 @@ private:
     juce::ComboBox typeBox;
     juce::TextButton removeButton { "Remove" };
 
+    juce::Label bandOptionsLabel { {}, "BAND" };
+    juce::ToggleButton bandEnabledButton { "Active" };
+    juce::ToggleButton bandSoloButton { "Solo" };
+    juce::Label slopeLabel { {}, "Slope" };
+    juce::Slider slopeSlider;
+    juce::ToggleButton brickwallButton { "Brickwall" };
+    juce::Label stereoLabel { {}, "Stereo" };
+    juce::ComboBox stereoModeBox;
+    juce::Label balanceLabel { {}, "Bal" };
+    juce::Slider balanceSlider;
+
+    juce::Label displayRangeLabel { {}, "Range" };
+    juce::ComboBox displayRangeBox;
+
+    juce::ToggleButton specPreButton { "Pre" };
+    juce::ToggleButton specPostButton { "Post" };
+    juce::ToggleButton specFreezeButton { "Freeze" };
+    juce::Label specSpanLabel { {}, "Spec" };
+    juce::ComboBox specSpanBox;
+    juce::Rectangle<int> analyzerSpecBarBounds;
+
+    juce::Label outputGainLabel { {}, "Out" };
+    juce::Slider outputGainSlider;
+    juce::ToggleButton pluginBypassButton { "Bypass" };
+
     juce::Label dynSectionLabel { {}, "DYNAMICS" };
     juce::ToggleButton dynEnableButton { "On" };
     juce::Slider dynThresholdSlider;
@@ -74,19 +107,39 @@ private:
     juce::Slider dynAttackSlider;
     juce::Slider dynReleaseSlider;
     juce::Label dynThresholdLabel { {}, "Thresh" };
+    juce::TextButton dynThresholdAutoButton { "Auto" };
+    juce::ToggleButton dynAutoThresholdButton { "Track" };
     juce::Label dynRangeLabel { {}, "Range" };
     juce::Label dynRatioLabel { {}, "Ratio" };
     juce::Label dynAttackLabel { {}, "Attack" };
     juce::Label dynReleaseLabel { {}, "Release" };
-    juce::Label emptyHint { {}, "Select a band on the spectrum to edit type, dynamics, or remove it." };
+    juce::Slider qKnob;
+    juce::Label qKnobLabel { {}, "Q" };
+
+    juce::Label dynSidechainLabel { {}, "Sidechain" };
+    juce::Slider dynSidechainSlider;
+    juce::Label emptyHint { {},
+        "Click a band on the graph to edit frequency, gain, Q, and dynamics in this panel.\n"
+        "Double-click empty space to add a band · Scroll or ⌘-drag a handle for Q · Option-click a band to remove" };
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bandEnabledAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bandSoloAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> slopeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> brickwallAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> stereoModeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> balanceAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> dynEnableAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynThresholdAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> dynAutoThresholdAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynRangeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynRatioAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynAttackAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynReleaseAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> qKnobAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynSidechainAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> pluginBypassAttachment;
 
     int boundBand = -1;
     bool updatingInspector = false;

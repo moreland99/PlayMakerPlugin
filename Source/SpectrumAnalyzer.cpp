@@ -2,10 +2,13 @@
 #include "Brand.h"
 
 SpectrumAnalyzerComponent::SpectrumAnalyzerComponent(juce::AudioProcessorValueTreeState& stateToRead,
-                                                       AnalyzerDataProvider& analyzerToRead,
+                                                       AnalyzerDataProvider& postAnalyzerToRead,
+                                                       AnalyzerDataProvider& preAnalyzerToRead,
                                                        double& sampleRateToRead,
-                                                       const Theme& themeToUse)
-    : apvts(stateToRead), analyzer(analyzerToRead), sampleRate(sampleRateToRead), theme(themeToUse)
+                                                       const Theme& themeToUse,
+                                                       std::array<std::atomic<float>, Params::numBands>* dynOffsetsToRead)
+    : apvts(stateToRead), postAnalyzer(postAnalyzerToRead), preAnalyzer(preAnalyzerToRead),
+      sampleRate(sampleRateToRead), theme(themeToUse), dynOffsets(dynOffsetsToRead)
 {
     startTimerHz(30);
 }
@@ -15,45 +18,111 @@ SpectrumAnalyzerComponent::~SpectrumAnalyzerComponent()
     stopTimer();
 }
 
-void SpectrumAnalyzerComponent::timerCallback()
+void SpectrumAnalyzerComponent::setDisplayRangeHalfDb(float halfRangeDb)
 {
-    if (!analyzer.getMagnitudesDb(latestMagnitudesDb))
+    const float half = juce::jlimit(6.0f, 30.0f, halfRangeDb);
+    displayRangeHalfDb = half;
+    curveMinDb = -half;
+    curveMaxDb = half;
+    repaint();
+}
+
+void SpectrumAnalyzerComponent::setShowPreSpectrum(bool show)
+{
+    showPreSpectrum = show;
+    repaint();
+}
+
+void SpectrumAnalyzerComponent::setShowPostSpectrum(bool show)
+{
+    showPostSpectrum = show;
+    repaint();
+}
+
+void SpectrumAnalyzerComponent::setSpectrumFrozen(bool frozen)
+{
+    spectrumFrozen = frozen;
+    repaint();
+}
+
+void SpectrumAnalyzerComponent::setSpectrumSpanDb(float spanDb)
+{
+    spectrumSpanDb = (spanDb <= 75.0f) ? 60.0f : 90.0f;
+    repaint();
+}
+
+void SpectrumAnalyzerComponent::processSpectrumBlock(
+    bool gotFft,
+    const std::array<float, AnalyzerDataProvider::fftSize / 2>& latest,
+    std::array<float, AnalyzerDataProvider::fftSize / 2>& smoothed,
+    std::array<float, AnalyzerDataProvider::fftSize / 2>& display,
+    bool& initialized)
+{
+    if (!gotFft || spectrumFrozen)
         return;
 
-    const int n = (int) smoothedMagnitudesDb.size();
+    const int n = (int) smoothed.size();
 
-    if (!spectrumInitialized)
+    if (!initialized)
     {
-        smoothedMagnitudesDb = latestMagnitudesDb;
-        displayMagnitudesDb = latestMagnitudesDb;
-        spectrumInitialized = true;
+        smoothed = latest;
+        display = latest;
+        initialized = true;
     }
     else
     {
         for (int i = 0; i < n; ++i)
         {
-            const float target = latestMagnitudesDb[(size_t) i];
-            const float cur = smoothedMagnitudesDb[(size_t) i];
+            const float target = latest[(size_t) i];
+            const float cur = smoothed[(size_t) i];
             const float coeff = target > cur ? spectrumAttack : spectrumRelease;
-            smoothedMagnitudesDb[(size_t) i] = cur + (target - cur) * coeff;
+            smoothed[(size_t) i] = cur + (target - cur) * coeff;
         }
     }
 
-    // Spatial blur in dB — turns a spiky FFT into a soft energy silhouette.
     constexpr int passes = 3;
-    displayMagnitudesDb = smoothedMagnitudesDb;
+    display = smoothed;
     for (int pass = 0; pass < passes; ++pass)
     {
-        auto src = displayMagnitudesDb;
+        auto src = display;
         for (int i = 1; i < n - 1; ++i)
         {
-            displayMagnitudesDb[(size_t) i] = 0.20f * src[(size_t) (i - 1)]
-                                            + 0.60f * src[(size_t) i]
-                                            + 0.20f * src[(size_t) (i + 1)];
+            display[(size_t) i] = 0.20f * src[(size_t) (i - 1)]
+                                + 0.60f * src[(size_t) i]
+                                + 0.20f * src[(size_t) (i + 1)];
+        }
+    }
+}
+
+void SpectrumAnalyzerComponent::timerCallback()
+{
+    const bool gotPost = postAnalyzer.getMagnitudesDb(latestPostMagnitudesDb);
+    const bool gotPre = preAnalyzer.getMagnitudesDb(latestPreMagnitudesDb);
+
+    if (showPostSpectrum)
+        processSpectrumBlock(gotPost, latestPostMagnitudesDb, smoothedPostMagnitudesDb,
+                             displayPostMagnitudesDb, postSpectrumInitialized);
+    else if (gotPost)
+        juce::ignoreUnused(latestPostMagnitudesDb);
+
+    if (showPreSpectrum)
+        processSpectrumBlock(gotPre, latestPreMagnitudesDb, smoothedPreMagnitudesDb,
+                             displayPreMagnitudesDb, preSpectrumInitialized);
+    else if (gotPre)
+        juce::ignoreUnused(latestPreMagnitudesDb);
+
+    if (dynOffsets != nullptr)
+    {
+        for (int i = 0; i < Params::numBands; ++i)
+        {
+            const float target = (*dynOffsets)[(size_t) i].load(std::memory_order_relaxed);
+            auto& sm = smoothedDynOffsetDb[(size_t) i];
+            sm += (target - sm) * 0.35f;
         }
     }
 
-    repaint();
+    if (gotPost || gotPre || dynOffsets != nullptr)
+        repaint();
 }
 
 float SpectrumAnalyzerComponent::freqToX(float freq, float width)
@@ -91,6 +160,7 @@ void SpectrumAnalyzerComponent::paint(juce::Graphics& g)
     drawGrid(g, bounds);
     drawSpectrum(g, bounds);
     drawBandCurves(g, bounds);
+    drawCombinedCurve(g, bounds);
     drawCreatePreview(g, bounds);
     drawBandHandles(g, bounds);
     drawSelectionReadout(g, bounds);
@@ -112,6 +182,28 @@ int SpectrumAnalyzerComponent::countEnabledBands() const
         if (apvts.getRawParameterValue(Params::bandParamID(i, "enabled"))->load() >= 0.5f)
             ++count;
     return count;
+}
+
+bool SpectrumAnalyzerComponent::bandAudibleInChain(int bandIndex) const
+{
+    if (apvts.getRawParameterValue(Params::bandParamID(bandIndex, "enabled"))->load() < 0.5f)
+        return false;
+
+    bool anySolo = false;
+    for (int j = 0; j < Params::numBands; ++j)
+    {
+        if (apvts.getRawParameterValue(Params::bandParamID(j, "enabled"))->load() >= 0.5f
+            && apvts.getRawParameterValue(Params::bandParamID(j, "solo"))->load() >= 0.5f)
+        {
+            anySolo = true;
+            break;
+        }
+    }
+
+    if (anySolo && apvts.getRawParameterValue(Params::bandParamID(bandIndex, "solo"))->load() < 0.5f)
+        return false;
+
+    return true;
 }
 
 void SpectrumAnalyzerComponent::drawGrid(juce::Graphics& g, juce::Rectangle<float> bounds)
@@ -140,36 +232,41 @@ void SpectrumAnalyzerComponent::drawGrid(juce::Graphics& g, juce::Rectangle<floa
         }
     }
 
-    // 0 dB emphasis + ±12 dB guides on the curve scale.
-    for (float db : { -24.0f, -12.0f, 0.0f, 12.0f, 24.0f })
+    const float half = displayRangeHalfDb;
+    const float quarter = half * 0.5f;
+    for (float db : { -half, -quarter, 0.0f, quarter, half })
     {
         const float y = bounds.getY() + dbToY(db, bounds.getHeight(), curveMinDb, curveMaxDb);
         const bool zero = std::abs(db) < 0.01f;
+        const bool labelled = zero || std::abs(std::abs(db) - quarter) < 0.01f || std::abs(std::abs(db) - half) < 0.01f;
         g.setColour(theme.grid.withAlpha(zero ? 0.9f : 0.55f));
         g.drawHorizontalLine((int) y, bounds.getX(), bounds.getRight());
-        if (zero || std::abs(db) == 12.0f)
+        if (labelled)
         {
             g.setColour(theme.ink.withAlpha(theme.isLight() ? 0.40f : 0.28f));
-            g.drawText(juce::String((int) db),
+            g.drawText(juce::String((int) std::lround(db)),
                        juce::Rectangle<float>(bounds.getRight() - 30.0f, y - 7.0f, 28.0f, 12.0f),
                        juce::Justification::centredRight, false);
         }
     }
 }
 
-void SpectrumAnalyzerComponent::drawSpectrum(juce::Graphics& g, juce::Rectangle<float> bounds)
+void SpectrumAnalyzerComponent::drawSpectrumTrace(juce::Graphics& g, juce::Rectangle<float> bounds,
+                                                 const std::array<float, AnalyzerDataProvider::fftSize / 2>& magnitudesDb,
+                                                 juce::Colour stroke, juce::Colour fill, float fillAlpha)
 {
-    if (sampleRate <= 0.0 || !spectrumInitialized)
+    if (sampleRate <= 0.0)
         return;
+
+    const float specMinDb = -spectrumSpanDb;
+    const float specMaxDb = 0.0f;
 
     juce::Path path;
     const auto width = bounds.getWidth();
-    const auto spectrumH = bounds.getHeight() * spectrumHeightRatio;
-    const auto spectrumTop = bounds.getBottom() - spectrumH;
+    const auto height = bounds.getHeight();
     const int lastBin = AnalyzerDataProvider::fftSize / 2 - 1;
     bool started = false;
 
-    // Sample every 2px with averaged (not peaked) energy — soft mountain, not FFT spikes.
     constexpr int step = 2;
     for (int x = 0; x < (int) width; x += step)
     {
@@ -180,16 +277,11 @@ void SpectrumAnalyzerComponent::drawSpectrum(juce::Graphics& g, juce::Rectangle<
         const int binR = juce::jlimit(1, lastBin,
             (int) (freqR * (float) AnalyzerDataProvider::fftSize / (float) sampleRate));
 
-        float sum = 0.0f;
-        int count = 0;
+        float peak = -100.0f;
         for (int b = binL; b <= juce::jmax(binL, binR); ++b)
-        {
-            // Average in approximate linear power so loud spikes don't dominate the silhouette.
-            sum += juce::Decibels::decibelsToGain(displayMagnitudesDb[(size_t) b], -100.0f);
-            ++count;
-        }
-        const float db = juce::Decibels::gainToDecibels(sum / (float) juce::jmax(1, count), -100.0f);
-        const float y = spectrumTop + dbToY(db, spectrumH, spectrumMinDb, spectrumMaxDb);
+            peak = juce::jmax(peak, magnitudesDb[(size_t) b]);
+
+        const float y = bounds.getY() + dbToY(peak, height, specMinDb, specMaxDb);
 
         if (!started)
         {
@@ -205,18 +297,36 @@ void SpectrumAnalyzerComponent::drawSpectrum(juce::Graphics& g, juce::Rectangle<
     if (!started)
         return;
 
+    if (fillAlpha > 0.001f)
     {
-        juce::Path fill = path;
-        fill.lineTo(bounds.getRight(), bounds.getBottom());
-        fill.lineTo(bounds.getX(), bounds.getBottom());
-        fill.closeSubPath();
-        g.setColour(theme.spectrum.withAlpha(0.14f));
-        g.fillPath(fill);
+        juce::Path fillPath = path;
+        fillPath.lineTo(bounds.getRight(), bounds.getBottom());
+        fillPath.lineTo(bounds.getX(), bounds.getBottom());
+        fillPath.closeSubPath();
+        g.setColour(fill.withAlpha(fillAlpha));
+        g.fillPath(fillPath);
     }
-    // Hairline only — the fill carries the shape (Pro-style quiet analyzer).
-    g.setColour(theme.spectrum.withAlpha(0.28f));
+
+    g.setColour(stroke);
     g.strokePath(path, juce::PathStrokeType(1.1f, juce::PathStrokeType::curved,
                                              juce::PathStrokeType::rounded));
+}
+
+void SpectrumAnalyzerComponent::drawSpectrum(juce::Graphics& g, juce::Rectangle<float> bounds)
+{
+    if (showPreSpectrum && preSpectrumInitialized)
+    {
+        drawSpectrumTrace(g, bounds, displayPreMagnitudesDb,
+                          theme.signalOrange.withAlpha(theme.isLight() ? 0.55f : 0.48f),
+                          theme.signalOrange, theme.isLight() ? 0.10f : 0.12f);
+    }
+
+    if (showPostSpectrum && postSpectrumInitialized)
+    {
+        drawSpectrumTrace(g, bounds, displayPostMagnitudesDb,
+                          theme.spectrum.withAlpha(0.28f),
+                          theme.spectrum, 0.14f);
+    }
 }
 
 void SpectrumAnalyzerComponent::drawResponsePath(juce::Graphics& g, juce::Rectangle<float> bounds,
@@ -316,6 +426,69 @@ void SpectrumAnalyzerComponent::drawDynamicRangeFill(juce::Graphics& g, juce::Re
     g.fillPath(fill);
 }
 
+void SpectrumAnalyzerComponent::drawCombinedCurve(juce::Graphics& g, juce::Rectangle<float> bounds)
+{
+    if (sampleRate <= 0.0 || countEnabledBands() == 0)
+        return;
+
+    juce::Path path;
+    const auto width = bounds.getWidth();
+    const auto height = bounds.getHeight();
+    bool started = false;
+
+    for (int x = 0; x < (int) width; ++x)
+    {
+        const auto norm = (float) x / width;
+        const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
+        double totalMag = 1.0;
+
+        for (int i = 0; i < Params::numBands; ++i)
+        {
+            if (apvts.getRawParameterValue(Params::bandParamID(i, "enabled"))->load() < 0.5f)
+                continue;
+
+            if (!bandAudibleInChain(i))
+                continue;
+
+            auto type = static_cast<Params::FilterType>(
+                (int) apvts.getRawParameterValue(Params::bandParamID(i, "type"))->load());
+            auto freq = apvts.getRawParameterValue(Params::bandParamID(i, "freq"))->load();
+            auto gain = apvts.getRawParameterValue(Params::bandParamID(i, "gain"))->load();
+            const bool dynOn = apvts.getRawParameterValue(Params::bandParamID(i, "dynEnabled"))->load() >= 0.5f
+                               && Params::typeSupportsDynamics(type);
+            if (dynOn && dynOffsets != nullptr)
+                gain += smoothedDynOffsetDb[(size_t) i];
+            auto q = apvts.getRawParameterValue(Params::bandParamID(i, "q"))->load();
+            auto slope = apvts.getRawParameterValue(Params::bandParamID(i, "slope"))->load();
+            auto brickwall = apvts.getRawParameterValue(Params::bandParamID(i, "brickwall"))->load() >= 0.5f;
+
+            const auto stages = FilterBand::computeStages(type, sampleRate, freq, gain, q, slope, brickwall);
+            totalMag *= FilterBand::getMagnitudeForFrequency(stages, probeFreq, sampleRate);
+        }
+
+        const auto db = juce::Decibels::gainToDecibels((float) totalMag, -100.0f);
+        const auto y = bounds.getY() + dbToY(db, height, curveMinDb, curveMaxDb);
+        const float px = bounds.getX() + (float) x;
+
+        if (!started)
+        {
+            path.startNewSubPath(px, y);
+            started = true;
+        }
+        else
+        {
+            path.lineTo(px, y);
+        }
+    }
+
+    if (!started)
+        return;
+
+    g.setColour(theme.softWhite.withAlpha(theme.isLight() ? 0.55f : 0.72f));
+    g.strokePath(path, juce::PathStrokeType(2.35f, juce::PathStrokeType::curved,
+                                             juce::PathStrokeType::rounded));
+}
+
 void SpectrumAnalyzerComponent::drawBandCurves(juce::Graphics& g, juce::Rectangle<float> bounds)
 {
     if (sampleRate <= 0.0)
@@ -327,29 +500,33 @@ void SpectrumAnalyzerComponent::drawBandCurves(juce::Graphics& g, juce::Rectangl
         if (apvts.getRawParameterValue(Params::bandParamID(i, "enabled"))->load() < 0.5f)
             return;
 
+        const bool audible = bandAudibleInChain(i);
         const bool selected = isSelected(i);
         if (selected != selectedPass)
             return;
 
         auto type = static_cast<Params::FilterType>(
             (int) apvts.getRawParameterValue(Params::bandParamID(i, "type"))->load());
+        const bool dynOn = apvts.getRawParameterValue(Params::bandParamID(i, "dynEnabled"))->load() >= 0.5f
+                           && Params::typeSupportsDynamics(type);
         auto freq = apvts.getRawParameterValue(Params::bandParamID(i, "freq"))->load();
         auto gain = apvts.getRawParameterValue(Params::bandParamID(i, "gain"))->load();
+        if (dynOn && dynOffsets != nullptr)
+            gain += smoothedDynOffsetDb[(size_t) i];
         auto q = apvts.getRawParameterValue(Params::bandParamID(i, "q"))->load();
         auto slope = apvts.getRawParameterValue(Params::bandParamID(i, "slope"))->load();
         auto brickwall = apvts.getRawParameterValue(Params::bandParamID(i, "brickwall"))->load() >= 0.5f;
-        const bool dynOn = apvts.getRawParameterValue(Params::bandParamID(i, "dynEnabled"))->load() >= 0.5f
-                           && Params::typeSupportsDynamics(type);
         const float dynRange = apvts.getRawParameterValue(Params::bandParamID(i, "dynRange"))->load();
 
         const auto base = Theme::bandColour(i, theme.isLight());
         const auto dynTint = Theme::dynamicsColour(base, theme.isLight());
-        const bool dimOthers = !selectedBands.isEmpty() && !selected;
+        const bool dimOthers = (!selectedBands.isEmpty() && !selected) || !audible;
         // Dynamic bands read a shade richer/darker than static ones.
         const auto active = dynOn ? dynTint : base;
-        const auto colour = dimOthers ? active.withAlpha(theme.isLight() ? 0.38f : 0.28f)
+        const auto colour = !audible ? active.withAlpha(theme.isLight() ? 0.20f : 0.14f)
+                            : dimOthers ? active.withAlpha(theme.isLight() ? 0.38f : 0.28f)
                                       : (selected ? active : active.withAlpha(theme.isLight() ? 0.88f : 0.78f));
-        const float stroke = selected ? (dynOn ? 2.7f : 2.5f) : 1.35f;
+        const float stroke = selected ? (dynOn ? 2.9f : 2.5f) : (audible ? 1.35f : 0.9f);
         const float fillA = selected ? (theme.isLight() ? (dynOn ? 0.24f : 0.18f) : (dynOn ? 0.20f : 0.14f))
                                      : (dimOthers ? 0.03f : (theme.isLight() ? 0.09f : 0.07f));
 
@@ -381,7 +558,8 @@ void SpectrumAnalyzerComponent::drawBandHandles(juce::Graphics& g, juce::Rectang
 
         const auto pos = handlePosition(i, bounds);
         const bool selected = isSelected(i);
-        const bool dimOthers = !selectedBands.isEmpty() && !selected;
+        const bool audible = bandAudibleInChain(i);
+        const bool dimOthers = (!selectedBands.isEmpty() && !selected) || !audible;
         auto colour = Theme::bandColour(i, theme.isLight());
         const auto type = static_cast<Params::FilterType>(
             (int) apvts.getRawParameterValue(Params::bandParamID(i, "type"))->load());
@@ -728,17 +906,27 @@ void SpectrumAnalyzerComponent::mouseDown(const juce::MouseEvent& e)
         if (!isSelected(hit))
             selectOnly(hit);
 
-        gesture = Gesture::dragBand;
         primaryBand = hit;
 
         for (int i = 0; i < Params::numBands; ++i)
         {
             dragStartFreqs[(size_t) i] = apvts.getRawParameterValue(Params::bandParamID(i, "freq"))->load();
             dragStartGains[(size_t) i] = apvts.getRawParameterValue(Params::bandParamID(i, "gain"))->load();
+            dragStartQs[(size_t) i] = apvts.getRawParameterValue(Params::bandParamID(i, "q"))->load();
         }
         dragStartFreq = dragStartFreqs[(size_t) hit];
         dragStartGain = dragStartGains[(size_t) hit];
 
+        if (e.mods.isCommandDown() || e.mods.isCtrlDown())
+        {
+            gesture = Gesture::dragBandQ;
+            for (int i = 0; i < Params::numBands; ++i)
+                if (isSelected(i))
+                    beginBandGesture(i, { "q" });
+            return;
+        }
+
+        gesture = Gesture::dragBand;
         for (int i = 0; i < Params::numBands; ++i)
             if (isSelected(i))
                 beginBandGesture(i, { "freq", "gain" });
@@ -773,8 +961,8 @@ void SpectrumAnalyzerComponent::mouseDrag(const juce::MouseEvent& e)
         const auto freqRatio = newFreq / juce::jmax(1.0e-3f, dragStartFreq);
         const auto gainDelta = newGain - dragStartGain;
 
-        // Fine-tune: Ctrl/Cmd slows the move.
-        const float fine = e.mods.isCommandDown() || e.mods.isCtrlDown() ? 0.25f : 1.0f;
+        // Fine-tune freq/gain: Shift slows the move (Cmd/Ctrl + drag adjusts Q).
+        const float fine = e.mods.isShiftDown() ? 0.25f : 1.0f;
         const auto appliedFreq = dragStartFreq * std::pow(freqRatio, fine);
         const auto appliedGain = dragStartGain + gainDelta * fine;
         const auto appliedRatio = appliedFreq / juce::jmax(1.0e-3f, dragStartFreq);
@@ -786,6 +974,20 @@ void SpectrumAnalyzerComponent::mouseDrag(const juce::MouseEvent& e)
                 continue;
             setBandFreq(i, dragStartFreqs[(size_t) i] * appliedRatio);
             setBandGain(i, dragStartGains[(size_t) i] + appliedDelta);
+        }
+        repaint();
+        return;
+    }
+
+    if (gesture == Gesture::dragBandQ && primaryBand >= 0)
+    {
+        const float dy = gestureStartPos.y - e.position.y;
+        const float qDelta = dy * 0.018f * (e.mods.isShiftDown() ? 0.2f : 1.0f);
+        for (int i = 0; i < Params::numBands; ++i)
+        {
+            if (!isSelected(i))
+                continue;
+            setBandQ(i, dragStartQs[(size_t) i] + qDelta);
         }
         repaint();
         return;
@@ -820,6 +1022,12 @@ void SpectrumAnalyzerComponent::mouseUp(const juce::MouseEvent& e)
         for (int i = 0; i < Params::numBands; ++i)
             if (isSelected(i))
                 endBandGesture(i, { "freq", "gain" });
+    }
+    else if (gesture == Gesture::dragBandQ)
+    {
+        for (int i = 0; i < Params::numBands; ++i)
+            if (isSelected(i))
+                endBandGesture(i, { "q" });
     }
     else if (gesture == Gesture::createDrag && createPreviewActive)
     {

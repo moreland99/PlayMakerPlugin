@@ -67,6 +67,7 @@ public:
         // Relative mode judges the band's level against the full-mix reference envelope;
         // blend interpolates between absolute (direct) and relative detection.
         const float detectionDb = directDb - s.relativeBlend * referenceDb;
+        lastDetectionDb = detectionDb;
 
         const float over = detectionDb - s.thresholdDb;
         if (over <= 0.0f)
@@ -76,6 +77,8 @@ public:
         const float changeDb = juce::jmin(over * (1.0f - 1.0f / ratio), std::abs(s.rangeDb));
         return s.rangeDb < 0.0f ? -changeDb : changeDb;
     }
+
+    float getLastDetectionDb() const { return lastDetectionDb; }
 
 private:
     float envelopeAlpha(float timeMs) const
@@ -93,5 +96,6 @@ private:
     juce::dsp::IIR::Filter<float> bandFilter;
     float directEnv = 0.0f;
     float referenceEnv = 0.0f;
+    float lastDetectionDb = -100.0f;
     double sampleRate = 0.0;
 };

@@ -21,6 +21,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
             "Band " + juce::String(i + 1) + " Enabled",
             false));
 
+        params.push_back(std::make_unique<juce::AudioParameterBool>(
+            juce::ParameterID(bandParamID(i, "solo"), 1),
+            "Band " + juce::String(i + 1) + " Solo",
+            false));
+
         params.push_back(std::make_unique<juce::AudioParameterChoice>(
             juce::ParameterID(bandParamID(i, "type"), 1),
             "Band " + juce::String(i + 1) + " Type",
@@ -85,6 +90,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
             -24.0f,
             juce::AudioParameterFloatAttributes().withLabel("dB")));
 
+        params.push_back(std::make_unique<juce::AudioParameterBool>(
+            juce::ParameterID(bandParamID(i, "dynAutoThreshold"), 1),
+            "Band " + juce::String(i + 1) + " Dyn Auto Threshold",
+            false));
+
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID(bandParamID(i, "dynRange"), 1),
             "Band " + juce::String(i + 1) + " Dyn Range",
@@ -139,6 +149,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         "Linear Phase Quality",
         linearQualityNames(),
         1));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("outputGain", 1),
+        "Output Gain",
+        juce::NormalisableRange<float>(-24.0f, 24.0f, 0.01f),
+        0.0f,
+        juce::AudioParameterFloatAttributes().withLabel("dB")));
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID("pluginBypass", 1),
+        "Plugin Bypass",
+        false));
 
     return { params.begin(), params.end() };
 }
