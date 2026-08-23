@@ -84,7 +84,9 @@ public:
     int getPrimarySelectedBand() const;
     juce::Array<int> getSelectedBandIndices() const;
     void deleteSelectedBands();
+    juce::Point<float> getPrimaryHandlePosition() const;
     std::function<void()> onSelectionChanged;
+    std::function<void()> onBandMoved;
 
     void setDisplayRangeHalfDb(float halfRangeDb);
     float getDisplayRangeHalfDb() const { return displayRangeHalfDb; }

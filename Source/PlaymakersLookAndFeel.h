@@ -201,49 +201,126 @@ public:
                    bounds.withTrimmedLeft(8.0f), juce::Justification::centredLeft, false);
     }
 
+    void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
+                           float sliderPosProportional, float rotaryStartAngle, float rotaryEndAngle,
+                           juce::Slider& slider) override
+    {
+        juce::Colour accent = theme.signalOrange;
+        if (auto* c = slider.getProperties().getVarPointer("pmAccentColour"))
+            if (c->isString())
+                accent = juce::Colour::fromString(c->toString());
+
+        const bool large = (bool) slider.getProperties().getWithDefault("pmLargeKnob", false);
+        const bool bipolar = (bool) slider.getProperties().getWithDefault("pmBipolarArc", false);
+        // Prefer parameter proportion so skewed ranges (freq) map correctly.
+        const float prop = (float) slider.valueToProportionOfLength(slider.getValue());
+        const float startAng = rotaryStartAngle;
+        const float endAng = rotaryEndAngle;
+        const float angle = juce::jmap(prop, 0.0f, 1.0f, startAng, endAng);
+
+        const auto bounds = juce::Rectangle<float>((float) x, (float) y, (float) width, (float) height);
+        const float size = juce::jmin(bounds.getWidth(), bounds.getHeight());
+        const float cx = bounds.getCentreX();
+        const float cy = bounds.getCentreY();
+        const float enabledA = slider.isEnabled() ? 1.0f : 0.42f;
+
+        // Fill most of the control — solid dial, not a thin “gadget” ring.
+        const float outerR = size * (large ? 0.48f : 0.46f);
+        const float arcR = outerR * 0.96f;
+        const float bodyR = outerR * 0.78f;
+        const float rimR = bodyR * 0.92f;
+        const float faceR = bodyR * 0.72f;
+        const float arcW = large ? 3.6f : 2.8f;
+
+        // Soft drop under the dial.
+        g.setColour(juce::Colours::black.withAlpha((theme.isLight() ? 0.10f : 0.35f) * enabledA));
+        g.fillEllipse(cx - bodyR + 1.0f, cy - bodyR + 2.5f, bodyR * 2.0f, bodyR * 2.0f);
+
+        // Quiet track.
+        {
+            juce::Path track;
+            track.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAng, endAng, true);
+            g.setColour(theme.ink.withAlpha((theme.isLight() ? 0.14f : 0.22f) * enabledA));
+            g.strokePath(track, juce::PathStrokeType(arcW, juce::PathStrokeType::curved,
+                                                      juce::PathStrokeType::rounded));
+        }
+
+        // Value arc (bipolar from noon for gain).
+        {
+            juce::Path valueArc;
+            if (bipolar)
+            {
+                const float midAng = juce::jmap(0.5f, 0.0f, 1.0f, startAng, endAng);
+                valueArc.addCentredArc(cx, cy, arcR, arcR, 0.0f,
+                                       juce::jmin(midAng, angle), juce::jmax(midAng, angle), true);
+            }
+            else
+            {
+                valueArc.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAng, angle, true);
+            }
+            g.setColour(accent.withAlpha(0.95f * enabledA));
+            g.strokePath(valueArc, juce::PathStrokeType(arcW + 0.4f, juce::PathStrokeType::curved,
+                                                        juce::PathStrokeType::rounded));
+        }
+
+        // Metal-ish body: outer rim + recessed face.
+        const auto bodyCol = theme.isLight() ? juce::Colour(0xffeceef0) : juce::Colour(0xff2c2c31);
+        const auto rimCol = theme.isLight() ? juce::Colour(0xffd4d7db) : juce::Colour(0xff1a1a1e);
+        const auto faceCol = theme.isLight() ? juce::Colour(0xfff7f8f9) : juce::Colour(0xff35353b);
+
+        g.setColour(rimCol.withMultipliedAlpha(enabledA));
+        g.fillEllipse(cx - bodyR, cy - bodyR, bodyR * 2.0f, bodyR * 2.0f);
+
+        {
+            juce::ColourGradient rimGrad(bodyCol.brighter(0.18f), cx, cy - bodyR,
+                                         bodyCol.darker(0.22f), cx, cy + bodyR, false);
+            g.setGradientFill(rimGrad);
+            g.setOpacity(enabledA);
+            g.fillEllipse(cx - rimR, cy - rimR, rimR * 2.0f, rimR * 2.0f);
+            g.setOpacity(1.0f);
+        }
+
+        {
+            juce::ColourGradient faceGrad(faceCol.brighter(0.12f), cx - faceR * 0.35f, cy - faceR * 0.45f,
+                                          faceCol.darker(0.08f), cx + faceR * 0.2f, cy + faceR * 0.55f, false);
+            g.setGradientFill(faceGrad);
+            g.setOpacity(enabledA);
+            g.fillEllipse(cx - faceR, cy - faceR, faceR * 2.0f, faceR * 2.0f);
+            g.setOpacity(1.0f);
+        }
+
+        // Specular highlight (top edge).
+        g.setColour(theme.softWhite.withAlpha((theme.isLight() ? 0.35f : 0.14f) * enabledA));
+        g.drawEllipse(cx - faceR + 1.0f, cy - faceR + 1.0f, faceR * 2.0f - 2.0f, faceR * 2.0f - 2.0f, 1.0f);
+
+        // Needle.
+        const float needleInner = faceR * 0.12f;
+        const float needleOuter = faceR * 0.88f;
+        const float nx0 = cx + std::cos(angle) * needleInner;
+        const float ny0 = cy + std::sin(angle) * needleInner;
+        const float nx1 = cx + std::cos(angle) * needleOuter;
+        const float ny1 = cy + std::sin(angle) * needleOuter;
+        g.setColour((theme.isLight() ? theme.ink : theme.softWhite).withAlpha(0.95f * enabledA));
+        g.drawLine(nx0, ny0, nx1, ny1, large ? 2.4f : 2.0f);
+
+        // Tip dot in band accent.
+        const float tip = large ? 3.2f : 2.6f;
+        g.setColour(accent.withAlpha(enabledA));
+        g.fillEllipse(nx1 - tip, ny1 - tip, tip * 2.0f, tip * 2.0f);
+
+        // Center cap.
+        const float cap = faceR * 0.16f;
+        g.setColour((theme.isLight() ? theme.ink.withAlpha(0.18f) : juce::Colour(0xff1e1e22)).withMultipliedAlpha(enabledA));
+        g.fillEllipse(cx - cap, cy - cap, cap * 2.0f, cap * 2.0f);
+        juce::ignoreUnused(sliderPosProportional);
+    }
+
     void drawLinearSlider(juce::Graphics& g, int x, int y, int width, int height,
                            float sliderPos, float, float, const juce::Slider::SliderStyle style,
                            juce::Slider& slider) override
     {
         if (style != juce::Slider::LinearHorizontal && style != juce::Slider::LinearBar)
         {
-            if (style == juce::Slider::RotaryHorizontalVerticalDrag
-                || style == juce::Slider::RotaryVerticalDrag
-                || style == juce::Slider::RotaryHorizontalDrag)
-            {
-                juce::Colour accent = theme.signalOrange;
-                if (auto* c = slider.getProperties().getVarPointer("pmAccentColour"))
-                    if (c->isString())
-                        accent = juce::Colour::fromString(c->toString());
-
-                const auto bounds = juce::Rectangle<float>((float) x, (float) y, (float) width, (float) height).reduced(2.0f);
-                const float angle = juce::jmap((float) slider.getValue(), (float) slider.getMinimum(), (float) slider.getMaximum(),
-                                               juce::MathConstants<float>::pi * 1.15f,
-                                               juce::MathConstants<float>::pi * 2.85f);
-                const float cx = bounds.getCentreX();
-                const float cy = bounds.getCentreY();
-                const float r = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.42f;
-
-                g.setColour(theme.ink.withAlpha(theme.isLight() ? 0.10f : 0.12f));
-                juce::Path track;
-                track.addCentredArc(cx, cy, r, r, 0.0f,
-                                      juce::MathConstants<float>::pi * 1.15f,
-                                      juce::MathConstants<float>::pi * 2.85f, true);
-                g.strokePath(track, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved,
-                                                          juce::PathStrokeType::rounded));
-
-                g.setColour(accent.withAlpha(slider.isEnabled() ? 0.95f : 0.35f));
-                juce::Path valueArc;
-                valueArc.addCentredArc(cx, cy, r, r, 0.0f,
-                                       juce::MathConstants<float>::pi * 1.15f, angle, true);
-                g.strokePath(valueArc, juce::PathStrokeType(2.2f, juce::PathStrokeType::curved,
-                                                            juce::PathStrokeType::rounded));
-
-                g.setColour(accent);
-                g.fillEllipse(cx + std::cos(angle) * r - 2.5f, cy + std::sin(angle) * r - 2.5f, 5.0f, 5.0f);
-                return;
-            }
-
             LookAndFeel_V4::drawLinearSlider(g, x, y, width, height, sliderPos, 0, 0, style, slider);
             return;
         }
@@ -263,7 +340,7 @@ public:
         g.fillRect(track.withWidth(fillW));
 
         auto thumb = juce::Rectangle<float>(11.0f, 11.0f).withCentre({ sliderPos, cy });
-        g.setColour(theme.isLight() ? theme.softWhite : theme.softWhite);
+        g.setColour(theme.softWhite);
         g.fillEllipse(thumb);
         g.setColour(accent);
         g.drawEllipse(thumb.reduced(0.5f), 1.4f);

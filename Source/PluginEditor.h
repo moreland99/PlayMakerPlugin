@@ -7,6 +7,47 @@
 #include "PlaymakersLookAndFeel.h"
 #include "PresetBrowser.h"
 
+// Floating band controller — sits over the spectrum in Knobs mode (graph stays full size).
+class FloatingBandPanel : public juce::Component
+{
+public:
+    std::function<juce::Colour()> accentColour;
+
+    void paint(juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced(1.0f);
+        const auto accent = accentColour ? accentColour() : juce::Colour(0xffde5f41);
+
+        // Soft capsule with a slight crown — control hub, not a boxed inspector.
+        juce::Path shell;
+        const float rad = 16.0f;
+        const float midX = r.getCentreX();
+        const float crownY = r.getY();
+        const float sideY = r.getY() + 10.0f;
+
+        shell.startNewSubPath(r.getX() + rad, sideY);
+        shell.quadraticTo(midX - 70.0f, sideY, midX - 36.0f, crownY + 4.0f);
+        shell.quadraticTo(midX, crownY - 1.0f, midX + 36.0f, crownY + 4.0f);
+        shell.quadraticTo(midX + 70.0f, sideY, r.getRight() - rad, sideY);
+        shell.lineTo(r.getRight() - rad, sideY);
+        shell.lineTo(r.getRight(), sideY + rad);
+        shell.lineTo(r.getRight(), r.getBottom() - rad);
+        shell.quadraticTo(r.getRight(), r.getBottom(), r.getRight() - rad, r.getBottom());
+        shell.lineTo(r.getX() + rad, r.getBottom());
+        shell.quadraticTo(r.getX(), r.getBottom(), r.getX(), r.getBottom() - rad);
+        shell.lineTo(r.getX(), sideY + rad);
+        shell.quadraticTo(r.getX(), sideY, r.getX() + rad, sideY);
+        shell.closeSubPath();
+
+        g.setColour(juce::Colour(0xd9101014));
+        g.fillPath(shell);
+        g.setColour(juce::Colour(0x22ffffff));
+        g.strokePath(shell, juce::PathStrokeType(1.0f));
+        g.setColour(accent.withAlpha(0.88f));
+        g.fillRoundedRectangle(midX - 16.0f, crownY + 3.0f, 32.0f, 2.0f, 1.0f);
+    }
+};
+
 class PlaymakersEQAudioProcessorEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
@@ -34,6 +75,11 @@ private:
     void updateDynRangeLabelForBand(int bandIndex);
     void commitMetricFromLabel(juce::Label& label, const char* paramSuffix);
     bool isEditingMetrics() const;
+    bool usingMetricKnobs() const;
+    void setMetricKnobMode(bool knobs);
+    void updateMetricModeVisibility(bool hasSelection);
+    void reparentBandControlsForMode(bool knobs);
+    void layoutFloatingBandPanel(juce::Rectangle<int> graphBounds);
     static float parseFrequencyText(const juce::String& text);
     static float parseFloatText(const juce::String& text);
 
@@ -41,6 +87,7 @@ private:
     ThemeManager themeManager;
     PlaymakersLookAndFeel lookAndFeel { themeManager.current() };
     SpectrumAnalyzerComponent analyzer;
+    FloatingBandPanel floatingBandPanel;
 
     juce::Rectangle<int> brandLockupBounds;
     juce::Rectangle<int> inspectorBounds;
@@ -70,6 +117,15 @@ private:
     juce::Label freqValueLabel;
     juce::Label gainValueLabel;
     juce::Label qValueLabel;
+    juce::TextButton metricModeButton { "Knobs" };
+    juce::Slider freqKnob;
+    juce::Slider gainKnob;
+    juce::Slider qKnob;
+    juce::Label freqRangeHint { {}, "20 Hz – 20 kHz" };
+    juce::Label gainRangeHint { {}, "−24 – +24" };
+    juce::Label qRangeHint { {}, "0.1 – 18" };
+    juce::Rectangle<int> knobStripBounds;
+    juce::Point<int> floatingHandlePos;
     juce::Label typeLabel { {}, "TYPE" };
     juce::ComboBox typeBox;
     juce::TextButton removeButton { "Remove" };
@@ -113,8 +169,6 @@ private:
     juce::Label dynRatioLabel { {}, "Ratio" };
     juce::Label dynAttackLabel { {}, "Attack" };
     juce::Label dynReleaseLabel { {}, "Release" };
-    juce::Slider qKnob;
-    juce::Label qKnobLabel { {}, "Q" };
 
     juce::Label dynSidechainLabel { {}, "Sidechain" };
     juce::Slider dynSidechainSlider;
@@ -136,6 +190,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynRatioAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynAttackAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynReleaseAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> freqKnobAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gainKnobAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> qKnobAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynSidechainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;

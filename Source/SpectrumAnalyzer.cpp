@@ -637,6 +637,15 @@ int SpectrumAnalyzerComponent::getPrimarySelectedBand() const
     return -1;
 }
 
+juce::Point<float> SpectrumAnalyzerComponent::getPrimaryHandlePosition() const
+{
+    const int band = getPrimarySelectedBand();
+    auto bounds = getLocalBounds().toFloat();
+    if (band < 0)
+        return bounds.getCentre();
+    return handlePosition(band, bounds);
+}
+
 juce::Array<int> SpectrumAnalyzerComponent::getSelectedBandIndices() const
 {
     juce::Array<int> result;
@@ -975,6 +984,8 @@ void SpectrumAnalyzerComponent::mouseDrag(const juce::MouseEvent& e)
             setBandFreq(i, dragStartFreqs[(size_t) i] * appliedRatio);
             setBandGain(i, dragStartGains[(size_t) i] + appliedDelta);
         }
+        if (onBandMoved)
+            onBandMoved();
         repaint();
         return;
     }
@@ -989,6 +1000,8 @@ void SpectrumAnalyzerComponent::mouseDrag(const juce::MouseEvent& e)
                 continue;
             setBandQ(i, dragStartQs[(size_t) i] + qDelta);
         }
+        if (onBandMoved)
+            onBandMoved();
         repaint();
         return;
     }
