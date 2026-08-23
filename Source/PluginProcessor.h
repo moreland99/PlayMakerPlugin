@@ -75,9 +75,22 @@ private:
         juce::SmoothedValue<float> freq, gain, q;
     };
 
+    struct LastAppliedCoeffs
+    {
+        Params::FilterType type = Params::FilterType::bell;
+        float freq = -1.0f;
+        float gain = 0.0f;
+        float q = -1.0f;
+        float slope = -1.0f;
+        float dynOffset = 0.0f;
+        bool brickwall = false;
+        bool valid = false;
+    };
+
     std::array<FilterBand, Params::numBands> bands;
     std::array<Params::BandParamPointers, Params::numBands> paramPointers;
     std::array<BandSmoothers, Params::numBands> smoothers;
+    std::array<LastAppliedCoeffs, Params::numBands> lastAppliedCoeffs;
     std::array<DynamicBandDetector, Params::numBands> dynDetectors;
     Params::GlobalParamPointers globalPointers;
 

@@ -17,6 +17,9 @@ public:
     {
         sampleRate = newSampleRate;
         bandFilter.prepare({ newSampleRate, 8192, 1 });
+        *bandFilter.coefficients = std::array<float, 6> { 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f };
+        lastFreqHz = -1.0f;
+        lastQ = -1.0f;
         reset();
     }
 
@@ -46,8 +49,15 @@ public:
         if (sampleRate <= 0.0 || numSamples <= 0)
             return 0.0f;
 
-        *bandFilter.coefficients = *juce::dsp::IIR::Coefficients<float>::makeBandPass(
-            sampleRate, juce::jlimit(20.0f, (float) (sampleRate * 0.5 - 20.0), s.freqHz), juce::jmax(0.1f, s.q));
+        const float freq = juce::jlimit(20.0f, (float) (sampleRate * 0.5 - 20.0), s.freqHz);
+        const float q = juce::jmax(0.1f, s.q);
+        if (std::abs(freq - lastFreqHz) > 1.0e-5f || std::abs(q - lastQ) > 1.0e-5f)
+        {
+            *bandFilter.coefficients = juce::dsp::IIR::ArrayCoefficients<float>::makeBandPass(
+                sampleRate, freq, q);
+            lastFreqHz = freq;
+            lastQ = q;
+        }
 
         const float attackAlpha = envelopeAlpha(s.attackMs);
         const float releaseAlpha = envelopeAlpha(s.releaseMs);
@@ -97,5 +107,7 @@ private:
     float directEnv = 0.0f;
     float referenceEnv = 0.0f;
     float lastDetectionDb = -100.0f;
+    float lastFreqHz = -1.0f;
+    float lastQ = -1.0f;
     double sampleRate = 0.0;
 };

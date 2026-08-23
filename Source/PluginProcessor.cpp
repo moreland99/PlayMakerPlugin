@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include <atomic>
+#include <cmath>
 
 PlaymakersEQAudioProcessor::PlaymakersEQAudioProcessor()
     : AudioProcessor(BusesProperties()
@@ -78,6 +79,7 @@ void PlaymakersEQAudioProcessor::prepareToPlay(double sampleRate, int samplesPer
         sm.freq.setCurrentAndTargetValue(p.freq->load());
         sm.gain.setCurrentAndTargetValue(p.gain->load());
         sm.q.setCurrentAndTargetValue(p.q->load());
+        lastAppliedCoeffs[(size_t) i].valid = false;
         updateBandCoefficients(i, 0.0f, 1);
     }
 
@@ -270,8 +272,24 @@ void PlaymakersEQAudioProcessor::updateBandCoefficients(int bandIndex, float dyn
     const auto q = sm.q.skip(numSamplesForSmoothing);
 
     const auto type = static_cast<Params::FilterType>((int) p.type->load());
-    bands[(size_t) bandIndex].update(type, freq, gain + dynGainOffsetDb, q,
-                                      p.slope->load(), p.brickwall->load() >= 0.5f);
+    const auto slope = p.slope->load();
+    const bool brickwall = p.brickwall->load() >= 0.5f;
+    const auto appliedGain = gain + dynGainOffsetDb;
+
+    auto& last = lastAppliedCoeffs[(size_t) bandIndex];
+    constexpr float eps = 1.0e-5f;
+    if (last.valid
+        && last.type == type
+        && last.brickwall == brickwall
+        && std::abs(last.freq - freq) < eps
+        && std::abs(last.gain - appliedGain) < eps
+        && std::abs(last.q - q) < eps
+        && std::abs(last.slope - slope) < eps
+        && std::abs(last.dynOffset - dynGainOffsetDb) < eps)
+        return;
+
+    bands[(size_t) bandIndex].update(type, freq, appliedGain, q, slope, brickwall);
+    last = { type, freq, appliedGain, q, slope, dynGainOffsetDb, brickwall, true };
 }
 
 bool PlaymakersEQAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const

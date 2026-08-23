@@ -74,6 +74,7 @@ public:
     ~SpectrumAnalyzerComponent() override;
 
     void paint(juce::Graphics& g) override;
+    void resized() override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
@@ -127,8 +128,13 @@ private:
                               std::array<float, AnalyzerDataProvider::fftSize / 2>& smoothed,
                               std::array<float, AnalyzerDataProvider::fftSize / 2>& display,
                               bool& initialized);
-    void drawCombinedCurve(juce::Graphics& g, juce::Rectangle<float> bounds);
-    void drawBandCurves(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void rebuildCurveCache(juce::Rectangle<float> bounds);
+    bool curveParamsChanged() const;
+    void snapshotCurveParams();
+    void buildResponsePaths(juce::Path& stroke, juce::Path* fill,
+                            juce::Rectangle<float> bounds, const FilterBand::StageSet& stages);
+    void drawCombinedCurve(juce::Graphics& g);
+    void drawBandCurves(juce::Graphics& g);
     void drawBandHandles(juce::Graphics& g, juce::Rectangle<float> bounds);
     void drawCreatePreview(juce::Graphics& g, juce::Rectangle<float> bounds);
     void drawMarquee(juce::Graphics& g);
@@ -139,10 +145,6 @@ private:
     void drawResponsePath(juce::Graphics& g, juce::Rectangle<float> bounds,
                           const FilterBand::StageSet& stages,
                           juce::Colour colour, float strokeWidth, float fillAlpha = 0.0f);
-    void drawDynamicRangeFill(juce::Graphics& g, juce::Rectangle<float> bounds,
-                              const FilterBand::StageSet& staticStages,
-                              const FilterBand::StageSet& extremeStages,
-                              juce::Colour colour);
 
     juce::Point<float> handlePosition(int bandIndex, juce::Rectangle<float> bounds) const;
     int hitTestBand(juce::Point<float> pos, juce::Rectangle<float> bounds) const;
@@ -207,6 +209,49 @@ private:
     float displayRangeHalfDb = 24.0f;
     float curveMinDb = -24.0f;
     float curveMaxDb = 24.0f;
+
+    struct BandCurveSnapshot
+    {
+        int type = 0;
+        float freq = -1.0f;
+        float gain = 0.0f;
+        float q = -1.0f;
+        float slope = -1.0f;
+        float dynRange = 0.0f;
+        float dynOffset = 0.0f;
+        bool enabled = false;
+        bool solo = false;
+        bool brickwall = false;
+        bool dynOn = false;
+        bool selected = false;
+    };
+
+    struct BandCurveCache
+    {
+        juce::Path stroke;
+        juce::Path fill;
+        juce::Path dynFill;
+        juce::Colour colour;
+        juce::Colour dynFillColour;
+        float strokeWidth = 1.35f;
+        float fillAlpha = 0.0f;
+        bool enabled = false;
+        bool selected = false;
+        bool hasDynFill = false;
+    };
+
+    juce::Path combinedCurvePath;
+    std::array<BandCurveCache, Params::numBands> bandCurveCache {};
+    std::array<BandCurveSnapshot, Params::numBands> curveParamSnapshot {};
+    bool curveCacheValid = false;
+    double cachedCurveSampleRate = 0.0;
+    int cachedCurveWidth = 0;
+    int cachedCurveHeight = 0;
+    float cachedCurveMinDb = 0.0f;
+    float cachedCurveMaxDb = 0.0f;
+
+    static constexpr int curveResolution = 384;
+    static constexpr float dynOffsetRebuildThresholdDb = 0.1f;
     static constexpr float spectrumAttack = 0.22f;
     static constexpr float spectrumRelease = 0.08f;
     static constexpr float handleHitRadiusPx = 14.0f;

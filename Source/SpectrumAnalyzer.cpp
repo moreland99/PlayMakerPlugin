@@ -24,7 +24,13 @@ void SpectrumAnalyzerComponent::setDisplayRangeHalfDb(float halfRangeDb)
     displayRangeHalfDb = half;
     curveMinDb = -half;
     curveMaxDb = half;
+    curveCacheValid = false;
     repaint();
+}
+
+void SpectrumAnalyzerComponent::resized()
+{
+    curveCacheValid = false;
 }
 
 void SpectrumAnalyzerComponent::setShowPreSpectrum(bool show)
@@ -111,6 +117,7 @@ void SpectrumAnalyzerComponent::timerCallback()
     else if (gotPre)
         juce::ignoreUnused(latestPreMagnitudesDb);
 
+    bool dynMovedEnough = false;
     if (dynOffsets != nullptr)
     {
         for (int i = 0; i < Params::numBands; ++i)
@@ -118,10 +125,16 @@ void SpectrumAnalyzerComponent::timerCallback()
             const float target = (*dynOffsets)[(size_t) i].load(std::memory_order_relaxed);
             auto& sm = smoothedDynOffsetDb[(size_t) i];
             sm += (target - sm) * 0.35f;
+            if (std::abs(sm - curveParamSnapshot[(size_t) i].dynOffset) >= dynOffsetRebuildThresholdDb)
+                dynMovedEnough = true;
         }
     }
 
-    if (gotPost || gotPre || dynOffsets != nullptr)
+    if (dynMovedEnough || curveParamsChanged())
+        curveCacheValid = false;
+
+    const bool gestureActive = gesture != Gesture::none || createPreviewActive;
+    if (gotPost || gotPre || !curveCacheValid || gestureActive)
         repaint();
 }
 
@@ -157,10 +170,18 @@ void SpectrumAnalyzerComponent::paint(juce::Graphics& g)
     g.setColour(theme.background);
     g.fillRect(bounds);
 
+    const bool boundsChanged = cachedCurveWidth != (int) bounds.getWidth()
+                            || cachedCurveHeight != (int) bounds.getHeight();
+    const bool rangeChanged = std::abs(cachedCurveSampleRate - sampleRate) > 0.5
+                           || std::abs(cachedCurveMinDb - curveMinDb) > 0.01f
+                           || std::abs(cachedCurveMaxDb - curveMaxDb) > 0.01f;
+    if (!curveCacheValid || boundsChanged || rangeChanged || curveParamsChanged())
+        rebuildCurveCache(bounds);
+
     drawGrid(g, bounds);
     drawSpectrum(g, bounds);
-    drawBandCurves(g, bounds);
-    drawCombinedCurve(g, bounds);
+    drawBandCurves(g);
+    drawCombinedCurve(g);
     drawCreatePreview(g, bounds);
     drawBandHandles(g, bounds);
     drawSelectionReadout(g, bounds);
@@ -329,181 +350,159 @@ void SpectrumAnalyzerComponent::drawSpectrum(juce::Graphics& g, juce::Rectangle<
     }
 }
 
+void SpectrumAnalyzerComponent::buildResponsePaths(juce::Path& stroke, juce::Path* fill,
+                                                    juce::Rectangle<float> bounds,
+                                                    const FilterBand::StageSet& stages)
+{
+    stroke.clear();
+    if (fill != nullptr)
+        fill->clear();
+
+    if (sampleRate <= 0.0)
+        return;
+
+    const auto width = bounds.getWidth();
+    const auto height = bounds.getHeight();
+    const int points = juce::jmax(2, juce::jmin(curveResolution, (int) width));
+    bool started = false;
+
+    for (int i = 0; i < points; ++i)
+    {
+        const auto norm = points > 1 ? (float) i / (float) (points - 1) : 0.0f;
+        const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
+        const auto magnitude = FilterBand::getMagnitudeForFrequency(stages, probeFreq, sampleRate);
+        const auto db = juce::Decibels::gainToDecibels((float) magnitude, -100.0f);
+        const auto x = bounds.getX() + norm * width;
+        const auto y = bounds.getY() + dbToY(db, height, curveMinDb, curveMaxDb);
+
+        if (!started)
+        {
+            stroke.startNewSubPath(x, y);
+            started = true;
+        }
+        else
+        {
+            stroke.lineTo(x, y);
+        }
+    }
+
+    if (started && fill != nullptr)
+    {
+        const float zeroY = bounds.getY() + dbToY(0.0f, height, curveMinDb, curveMaxDb);
+        *fill = stroke;
+        fill->lineTo(bounds.getRight(), zeroY);
+        fill->lineTo(bounds.getX(), zeroY);
+        fill->closeSubPath();
+    }
+}
+
 void SpectrumAnalyzerComponent::drawResponsePath(juce::Graphics& g, juce::Rectangle<float> bounds,
                                                   const FilterBand::StageSet& stages,
                                                   juce::Colour colour, float strokeWidth,
                                                   float fillAlpha)
 {
-    if (sampleRate <= 0.0)
-        return;
+    juce::Path stroke, fill;
+    buildResponsePaths(stroke, fillAlpha > 0.001f ? &fill : nullptr, bounds, stages);
 
-    juce::Path path;
-    const auto width = bounds.getWidth();
-    const auto height = bounds.getHeight();
-    const float zeroY = bounds.getY() + dbToY(0.0f, height, curveMinDb, curveMaxDb);
-    bool started = false;
-
-    for (int x = 0; x < (int) width; ++x)
+    if (fillAlpha > 0.001f && !fill.isEmpty())
     {
-        const auto norm = (float) x / width;
-        const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
-        const auto magnitude = FilterBand::getMagnitudeForFrequency(stages, probeFreq, sampleRate);
-        const auto db = juce::Decibels::gainToDecibels((float) magnitude, -100.0f);
-        const auto y = bounds.getY() + dbToY(db, height, curveMinDb, curveMaxDb);
-
-        if (!started)
-        {
-            path.startNewSubPath(bounds.getX() + (float) x, y);
-            started = true;
-        }
-        else
-        {
-            path.lineTo(bounds.getX() + (float) x, y);
-        }
-    }
-
-    if (started && fillAlpha > 0.001f)
-    {
-        juce::Path fill = path;
-        fill.lineTo(bounds.getRight(), zeroY);
-        fill.lineTo(bounds.getX(), zeroY);
-        fill.closeSubPath();
         g.setColour(colour.withAlpha(fillAlpha));
         g.fillPath(fill);
     }
 
-    g.setColour(colour);
-    g.strokePath(path, juce::PathStrokeType(strokeWidth, juce::PathStrokeType::curved,
-                                             juce::PathStrokeType::rounded));
+    if (!stroke.isEmpty())
+    {
+        g.setColour(colour);
+        g.strokePath(stroke, juce::PathStrokeType(strokeWidth, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+    }
 }
 
-void SpectrumAnalyzerComponent::drawDynamicRangeFill(juce::Graphics& g, juce::Rectangle<float> bounds,
-                                                      const FilterBand::StageSet& staticStages,
-                                                      const FilterBand::StageSet& extremeStages,
-                                                      juce::Colour colour)
+bool SpectrumAnalyzerComponent::curveParamsChanged() const
 {
-    if (sampleRate <= 0.0)
-        return;
-
-    juce::Path fill;
-    const auto width = bounds.getWidth();
-    const auto height = bounds.getHeight();
-    bool started = false;
-
-    for (int x = 0; x < (int) width; ++x)
+    for (int i = 0; i < Params::numBands; ++i)
     {
-        const auto norm = (float) x / width;
-        const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
-        const auto dbA = juce::Decibels::gainToDecibels(
-            (float) FilterBand::getMagnitudeForFrequency(staticStages, probeFreq, sampleRate), -100.0f);
-        const float yA = bounds.getY() + dbToY(dbA, height, curveMinDb, curveMaxDb);
-        const float px = bounds.getX() + (float) x;
+        const auto& snap = curveParamSnapshot[(size_t) i];
+        const auto type = (int) apvts.getRawParameterValue(Params::bandParamID(i, "type"))->load();
+        const bool dynOn = apvts.getRawParameterValue(Params::bandParamID(i, "dynEnabled"))->load() >= 0.5f
+                           && Params::typeSupportsDynamics(static_cast<Params::FilterType>(type));
 
-        if (!started)
-        {
-            fill.startNewSubPath(px, yA);
-            started = true;
-        }
-        else
-        {
-            fill.lineTo(px, yA);
-        }
+        if (snap.type != type
+            || snap.enabled != (apvts.getRawParameterValue(Params::bandParamID(i, "enabled"))->load() >= 0.5f)
+            || snap.solo != (apvts.getRawParameterValue(Params::bandParamID(i, "solo"))->load() >= 0.5f)
+            || snap.brickwall != (apvts.getRawParameterValue(Params::bandParamID(i, "brickwall"))->load() >= 0.5f)
+            || snap.dynOn != dynOn
+            || snap.selected != isSelected(i)
+            || std::abs(snap.freq - apvts.getRawParameterValue(Params::bandParamID(i, "freq"))->load()) > 1.0e-4f
+            || std::abs(snap.gain - apvts.getRawParameterValue(Params::bandParamID(i, "gain"))->load()) > 1.0e-4f
+            || std::abs(snap.q - apvts.getRawParameterValue(Params::bandParamID(i, "q"))->load()) > 1.0e-4f
+            || std::abs(snap.slope - apvts.getRawParameterValue(Params::bandParamID(i, "slope"))->load()) > 1.0e-4f
+            || std::abs(snap.dynRange - apvts.getRawParameterValue(Params::bandParamID(i, "dynRange"))->load()) > 1.0e-4f)
+            return true;
     }
 
-    if (!started)
-        return;
-
-    for (int x = (int) width - 1; x >= 0; --x)
-    {
-        const auto norm = (float) x / width;
-        const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
-        const auto dbB = juce::Decibels::gainToDecibels(
-            (float) FilterBand::getMagnitudeForFrequency(extremeStages, probeFreq, sampleRate), -100.0f);
-        fill.lineTo(bounds.getX() + (float) x, bounds.getY() + dbToY(dbB, height, curveMinDb, curveMaxDb));
-    }
-    fill.closeSubPath();
-    g.setColour(colour.withAlpha(0.16f));
-    g.fillPath(fill);
+    return false;
 }
 
-void SpectrumAnalyzerComponent::drawCombinedCurve(juce::Graphics& g, juce::Rectangle<float> bounds)
+void SpectrumAnalyzerComponent::snapshotCurveParams()
 {
-    if (sampleRate <= 0.0 || countEnabledBands() == 0)
-        return;
-
-    juce::Path path;
-    const auto width = bounds.getWidth();
-    const auto height = bounds.getHeight();
-    bool started = false;
-
-    for (int x = 0; x < (int) width; ++x)
+    for (int i = 0; i < Params::numBands; ++i)
     {
-        const auto norm = (float) x / width;
-        const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
-        double totalMag = 1.0;
-
-        for (int i = 0; i < Params::numBands; ++i)
-        {
-            if (apvts.getRawParameterValue(Params::bandParamID(i, "enabled"))->load() < 0.5f)
-                continue;
-
-            if (!bandAudibleInChain(i))
-                continue;
-
-            auto type = static_cast<Params::FilterType>(
-                (int) apvts.getRawParameterValue(Params::bandParamID(i, "type"))->load());
-            auto freq = apvts.getRawParameterValue(Params::bandParamID(i, "freq"))->load();
-            auto gain = apvts.getRawParameterValue(Params::bandParamID(i, "gain"))->load();
-            const bool dynOn = apvts.getRawParameterValue(Params::bandParamID(i, "dynEnabled"))->load() >= 0.5f
-                               && Params::typeSupportsDynamics(type);
-            if (dynOn && dynOffsets != nullptr)
-                gain += smoothedDynOffsetDb[(size_t) i];
-            auto q = apvts.getRawParameterValue(Params::bandParamID(i, "q"))->load();
-            auto slope = apvts.getRawParameterValue(Params::bandParamID(i, "slope"))->load();
-            auto brickwall = apvts.getRawParameterValue(Params::bandParamID(i, "brickwall"))->load() >= 0.5f;
-
-            const auto stages = FilterBand::computeStages(type, sampleRate, freq, gain, q, slope, brickwall);
-            totalMag *= FilterBand::getMagnitudeForFrequency(stages, probeFreq, sampleRate);
-        }
-
-        const auto db = juce::Decibels::gainToDecibels((float) totalMag, -100.0f);
-        const auto y = bounds.getY() + dbToY(db, height, curveMinDb, curveMaxDb);
-        const float px = bounds.getX() + (float) x;
-
-        if (!started)
-        {
-            path.startNewSubPath(px, y);
-            started = true;
-        }
-        else
-        {
-            path.lineTo(px, y);
-        }
+        auto& snap = curveParamSnapshot[(size_t) i];
+        snap.type = (int) apvts.getRawParameterValue(Params::bandParamID(i, "type"))->load();
+        snap.freq = apvts.getRawParameterValue(Params::bandParamID(i, "freq"))->load();
+        snap.gain = apvts.getRawParameterValue(Params::bandParamID(i, "gain"))->load();
+        snap.q = apvts.getRawParameterValue(Params::bandParamID(i, "q"))->load();
+        snap.slope = apvts.getRawParameterValue(Params::bandParamID(i, "slope"))->load();
+        snap.dynRange = apvts.getRawParameterValue(Params::bandParamID(i, "dynRange"))->load();
+        snap.dynOffset = smoothedDynOffsetDb[(size_t) i];
+        snap.enabled = apvts.getRawParameterValue(Params::bandParamID(i, "enabled"))->load() >= 0.5f;
+        snap.solo = apvts.getRawParameterValue(Params::bandParamID(i, "solo"))->load() >= 0.5f;
+        snap.brickwall = apvts.getRawParameterValue(Params::bandParamID(i, "brickwall"))->load() >= 0.5f;
+        snap.dynOn = snap.enabled
+            && apvts.getRawParameterValue(Params::bandParamID(i, "dynEnabled"))->load() >= 0.5f
+            && Params::typeSupportsDynamics(static_cast<Params::FilterType>(snap.type));
+        snap.selected = isSelected(i);
     }
-
-    if (!started)
-        return;
-
-    g.setColour(theme.softWhite.withAlpha(theme.isLight() ? 0.55f : 0.72f));
-    g.strokePath(path, juce::PathStrokeType(2.35f, juce::PathStrokeType::curved,
-                                             juce::PathStrokeType::rounded));
 }
 
-void SpectrumAnalyzerComponent::drawBandCurves(juce::Graphics& g, juce::Rectangle<float> bounds)
+void SpectrumAnalyzerComponent::rebuildCurveCache(juce::Rectangle<float> bounds)
 {
-    if (sampleRate <= 0.0)
-        return;
+    combinedCurvePath.clear();
+    cachedCurveWidth = (int) bounds.getWidth();
+    cachedCurveHeight = (int) bounds.getHeight();
+    cachedCurveSampleRate = sampleRate;
+    cachedCurveMinDb = curveMinDb;
+    cachedCurveMaxDb = curveMaxDb;
 
-    // Draw unselected first, selected last so the active band always sits on top.
-    auto drawOne = [&](int i, bool selectedPass)
+    if (sampleRate <= 0.0 || bounds.getWidth() < 2.0f)
     {
-        if (apvts.getRawParameterValue(Params::bandParamID(i, "enabled"))->load() < 0.5f)
-            return;
+        for (auto& cache : bandCurveCache)
+            cache.enabled = false;
+        curveCacheValid = true;
+        snapshotCurveParams();
+        return;
+    }
 
-        const bool audible = bandAudibleInChain(i);
-        const bool selected = isSelected(i);
-        if (selected != selectedPass)
-            return;
+    std::array<FilterBand::StageSet, Params::numBands> stages {};
+    std::array<bool, Params::numBands> audible {};
+    int enabledCount = 0;
+
+    for (int i = 0; i < Params::numBands; ++i)
+    {
+        auto& cache = bandCurveCache[(size_t) i];
+        cache.enabled = apvts.getRawParameterValue(Params::bandParamID(i, "enabled"))->load() >= 0.5f;
+        cache.hasDynFill = false;
+        cache.stroke.clear();
+        cache.fill.clear();
+        cache.dynFill.clear();
+
+        if (!cache.enabled)
+            continue;
+
+        ++enabledCount;
+        audible[(size_t) i] = bandAudibleInChain(i);
+        cache.selected = isSelected(i);
 
         auto type = static_cast<Params::FilterType>(
             (int) apvts.getRawParameterValue(Params::bandParamID(i, "type"))->load());
@@ -520,33 +519,147 @@ void SpectrumAnalyzerComponent::drawBandCurves(juce::Graphics& g, juce::Rectangl
 
         const auto base = Theme::bandColour(i, theme.isLight());
         const auto dynTint = Theme::dynamicsColour(base, theme.isLight());
-        const bool dimOthers = (!selectedBands.isEmpty() && !selected) || !audible;
-        // Dynamic bands read a shade richer/darker than static ones.
+        const bool dimOthers = (!selectedBands.isEmpty() && !cache.selected) || !audible[(size_t) i];
         const auto active = dynOn ? dynTint : base;
-        const auto colour = !audible ? active.withAlpha(theme.isLight() ? 0.20f : 0.14f)
-                            : dimOthers ? active.withAlpha(theme.isLight() ? 0.38f : 0.28f)
-                                      : (selected ? active : active.withAlpha(theme.isLight() ? 0.88f : 0.78f));
-        const float stroke = selected ? (dynOn ? 2.9f : 2.5f) : (audible ? 1.35f : 0.9f);
-        const float fillA = selected ? (theme.isLight() ? (dynOn ? 0.24f : 0.18f) : (dynOn ? 0.20f : 0.14f))
-                                     : (dimOthers ? 0.03f : (theme.isLight() ? 0.09f : 0.07f));
+        cache.colour = !audible[(size_t) i] ? active.withAlpha(theme.isLight() ? 0.20f : 0.14f)
+                       : dimOthers ? active.withAlpha(theme.isLight() ? 0.38f : 0.28f)
+                                 : (cache.selected ? active : active.withAlpha(theme.isLight() ? 0.88f : 0.78f));
+        cache.strokeWidth = cache.selected ? (dynOn ? 2.9f : 2.5f) : (audible[(size_t) i] ? 1.35f : 0.9f);
+        cache.fillAlpha = cache.selected ? (theme.isLight() ? (dynOn ? 0.24f : 0.18f) : (dynOn ? 0.20f : 0.14f))
+                                         : (dimOthers ? 0.03f : (theme.isLight() ? 0.09f : 0.07f));
 
-        const auto stages = FilterBand::computeStages(type, sampleRate, freq, gain, q, slope, brickwall);
+        FilterBand::assignStages(stages[(size_t) i], type, sampleRate, freq, gain, q, slope, brickwall);
+        buildResponsePaths(cache.stroke, &cache.fill, bounds, stages[(size_t) i]);
 
         if (dynOn && std::abs(dynRange) > 0.05f)
         {
-            const auto extreme = FilterBand::computeStages(type, sampleRate, freq,
-                                                           gain + dynRange, q, slope, brickwall);
-            drawDynamicRangeFill(g, bounds, stages, extreme,
-                                 dynTint.withAlpha(selected ? 1.0f : 0.6f));
-        }
+            FilterBand::StageSet extreme;
+            FilterBand::assignStages(extreme, type, sampleRate, freq, gain + dynRange, q, slope, brickwall);
 
-        drawResponsePath(g, bounds, stages, colour, stroke, fillA);
+            cache.dynFill.clear();
+            const auto width = bounds.getWidth();
+            const auto height = bounds.getHeight();
+            const int points = juce::jmax(2, juce::jmin(curveResolution, (int) width));
+            bool started = false;
+
+            for (int p = 0; p < points; ++p)
+            {
+                const auto norm = points > 1 ? (float) p / (float) (points - 1) : 0.0f;
+                const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
+                const auto dbA = juce::Decibels::gainToDecibels(
+                    (float) FilterBand::getMagnitudeForFrequency(stages[(size_t) i], probeFreq, sampleRate), -100.0f);
+                const float x = bounds.getX() + norm * width;
+                const float yA = bounds.getY() + dbToY(dbA, height, curveMinDb, curveMaxDb);
+
+                if (!started)
+                {
+                    cache.dynFill.startNewSubPath(x, yA);
+                    started = true;
+                }
+                else
+                {
+                    cache.dynFill.lineTo(x, yA);
+                }
+            }
+
+            if (started)
+            {
+                for (int p = points - 1; p >= 0; --p)
+                {
+                    const auto norm = points > 1 ? (float) p / (float) (points - 1) : 0.0f;
+                    const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
+                    const auto dbB = juce::Decibels::gainToDecibels(
+                        (float) FilterBand::getMagnitudeForFrequency(extreme, probeFreq, sampleRate), -100.0f);
+                    cache.dynFill.lineTo(bounds.getX() + norm * width,
+                                         bounds.getY() + dbToY(dbB, height, curveMinDb, curveMaxDb));
+                }
+                cache.dynFill.closeSubPath();
+                cache.hasDynFill = true;
+                cache.dynFillColour = dynTint.withAlpha(cache.selected ? 1.0f : 0.6f);
+            }
+        }
+    }
+
+    if (enabledCount > 0)
+    {
+        const auto width = bounds.getWidth();
+        const auto height = bounds.getHeight();
+        const int points = juce::jmax(2, juce::jmin(curveResolution, (int) width));
+        bool started = false;
+
+        for (int p = 0; p < points; ++p)
+        {
+            const auto norm = points > 1 ? (float) p / (float) (points - 1) : 0.0f;
+            const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
+            double totalMag = 1.0;
+
+            for (int i = 0; i < Params::numBands; ++i)
+                if (bandCurveCache[(size_t) i].enabled && audible[(size_t) i])
+                    totalMag *= FilterBand::getMagnitudeForFrequency(stages[(size_t) i], probeFreq, sampleRate);
+
+            const auto db = juce::Decibels::gainToDecibels((float) totalMag, -100.0f);
+            const float x = bounds.getX() + norm * width;
+            const float y = bounds.getY() + dbToY(db, height, curveMinDb, curveMaxDb);
+
+            if (!started)
+            {
+                combinedCurvePath.startNewSubPath(x, y);
+                started = true;
+            }
+            else
+            {
+                combinedCurvePath.lineTo(x, y);
+            }
+        }
+    }
+
+    snapshotCurveParams();
+    curveCacheValid = true;
+}
+
+void SpectrumAnalyzerComponent::drawCombinedCurve(juce::Graphics& g)
+{
+    if (combinedCurvePath.isEmpty())
+        return;
+
+    g.setColour(theme.softWhite.withAlpha(theme.isLight() ? 0.55f : 0.72f));
+    g.strokePath(combinedCurvePath, juce::PathStrokeType(2.35f, juce::PathStrokeType::curved,
+                                                          juce::PathStrokeType::rounded));
+}
+
+void SpectrumAnalyzerComponent::drawBandCurves(juce::Graphics& g)
+{
+    auto drawOne = [&](bool selectedPass)
+    {
+        for (int i = 0; i < Params::numBands; ++i)
+        {
+            const auto& cache = bandCurveCache[(size_t) i];
+            if (!cache.enabled || cache.selected != selectedPass)
+                continue;
+
+            if (cache.hasDynFill && !cache.dynFill.isEmpty())
+            {
+                g.setColour(cache.dynFillColour.withAlpha(0.16f));
+                g.fillPath(cache.dynFill);
+            }
+
+            if (cache.fillAlpha > 0.001f && !cache.fill.isEmpty())
+            {
+                g.setColour(cache.colour.withAlpha(cache.fillAlpha));
+                g.fillPath(cache.fill);
+            }
+
+            if (!cache.stroke.isEmpty())
+            {
+                g.setColour(cache.colour);
+                g.strokePath(cache.stroke, juce::PathStrokeType(cache.strokeWidth, juce::PathStrokeType::curved,
+                                                                juce::PathStrokeType::rounded));
+            }
+        }
     };
 
-    for (int i = 0; i < Params::numBands; ++i)
-        drawOne(i, false);
-    for (int i = 0; i < Params::numBands; ++i)
-        drawOne(i, true);
+    drawOne(false);
+    drawOne(true);
 }
 
 void SpectrumAnalyzerComponent::drawBandHandles(juce::Graphics& g, juce::Rectangle<float> bounds)
