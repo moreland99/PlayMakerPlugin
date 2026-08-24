@@ -4,7 +4,7 @@
 PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQAudioProcessor& p)
     : AudioProcessorEditor(&p), eqProcessor(p),
       analyzer(p.apvts, p.getPostAnalyzer(), p.getPreAnalyzer(), p.getSampleRateRef(), themeManager.current(),
-               &p.dynDisplayOffsetDb),
+               &p.dynDisplayOffsetDb, &p.getOutputMeters()),
       presetBrowser(p.presetManager, themeManager)
 {
     setLookAndFeel(&lookAndFeel);
@@ -156,7 +156,6 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
         kn->setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
         kn->setEnabled(false);
     }
-    gainKnob.getProperties().set("pmLargeKnob", true);
     gainKnob.getProperties().set("pmBipolarArc", true);
     freqKnob.setTooltip("Frequency — drag knob, or click the value to type");
     gainKnob.setTooltip("Gain — drag knob, or click the value to type");
@@ -170,7 +169,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
 
     metricModeButton.setClickingTogglesState(true);
     metricModeButton.setTooltip("Toggle Freq / Gain / Q between text fields and knobs");
-    const bool savedKnobs = (bool) eqProcessor.apvts.state.getProperty("metricKnobMode", false);
+    const bool savedKnobs = (bool) eqProcessor.apvts.state.getProperty("metricKnobMode", true);
     metricModeButton.setToggleState(savedKnobs, juce::dontSendNotification);
     metricModeButton.setButtonText(savedKnobs ? "Text" : "Knobs");
     metricModeButton.onClick = [this]
@@ -744,7 +743,7 @@ bool PlaymakersEQAudioProcessorEditor::isEditingMetrics() const
 
 bool PlaymakersEQAudioProcessorEditor::usingMetricKnobs() const
 {
-    return (bool) eqProcessor.apvts.state.getProperty("metricKnobMode", false);
+    return (bool) eqProcessor.apvts.state.getProperty("metricKnobMode", true);
 }
 
 void PlaymakersEQAudioProcessorEditor::setMetricKnobMode(bool knobs)
@@ -797,13 +796,12 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     const bool dynOpen = dynThresholdSlider.isVisible();
     const bool showSlope = slopeSlider.isVisible();
     const bool showSidechain = dynSidechainSlider.isVisible();
-    const int panelW = 440;
-    // Compact hub: knobs dominate; extras tuck under.
-    const int panelH = 118 + 24 + (dynOpen ? 44 : 0) + (showSidechain ? 22 : 0);
+    const int panelW = juce::jmin(520, juce::jmax(420, graphBounds.getWidth() - 16));
+    const int panelH = 92 + 18 + (dynOpen ? 36 : 0) + (showSidechain ? 18 : 0);
 
-    // Sit along the bottom of the graph and track the handle in X (not mid-curve).
+    // Sit along the bottom of the graph and track the handle in X.
     auto handle = analyzer.getPrimaryHandlePosition().toInt() + graphBounds.getTopLeft();
-    const int margin = 8;
+    const int margin = 6;
     auto panel = juce::Rectangle<int>(panelW, panelH);
     panel.setX(juce::jlimit(graphBounds.getX() + margin,
                             graphBounds.getRight() - panelW - margin,
@@ -819,45 +817,41 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     knobStripBounds = {};
     repaint();
 
-    auto r = floatingBandPanel.getLocalBounds().reduced(12, 10);
-    r.removeFromTop(6); // room for arched top
+    auto r = floatingBandPanel.getLocalBounds().reduced(10, 7);
 
-    auto head = r.removeFromTop(22);
-    bandEnabledButton.setBounds(head.removeFromLeft(52).withHeight(20));
+    auto head = r.removeFromTop(18);
+    bandEnabledButton.setBounds(head.removeFromLeft(50).withHeight(16));
     head.removeFromLeft(4);
-    bandSoloButton.setBounds(head.removeFromLeft(46).withHeight(20));
+    bandSoloButton.setBounds(head.removeFromLeft(42).withHeight(16));
     head.removeFromLeft(6);
-    typeBox.setBounds(head.removeFromLeft(108).withHeight(20));
+    typeBox.setBounds(head.removeFromLeft(96).withHeight(16));
     typeLabel.setBounds({});
     head.removeFromLeft(6);
-    dynEnableButton.setBounds(head.removeFromLeft(36).withHeight(20));
+    dynEnableButton.setBounds(head.removeFromLeft(32).withHeight(16));
     dynSectionLabel.setBounds({});
-    removeButton.setBounds(head.removeFromRight(56).withHeight(20));
+    removeButton.setBounds(head.removeFromRight(52).withHeight(16));
     head.removeFromRight(4);
-    metricModeButton.setBounds(head.removeFromRight(48).withHeight(20));
+    metricModeButton.setBounds(head.removeFromRight(44).withHeight(16));
 
     r.removeFromTop(2);
-    auto knobsRow = r.removeFromTop(86);
-    const int sideW = juce::jmax(92, knobsRow.getWidth() * 27 / 100);
-    const int centerW = juce::jmax(120, knobsRow.getWidth() - sideW * 2 - 10);
+    auto knobsRow = r.removeFromTop(54);
+    const int knobW = juce::jmax(88, knobsRow.getWidth() / 3);
 
     auto placeKnob = [](juce::Rectangle<int> card, juce::Label& value, juce::Slider& knob,
-                        juce::Label& caption, juce::Label& hint, bool large)
+                        juce::Label& caption, juce::Label& hint)
     {
-        auto inner = card.reduced(large ? 2 : 6, 0);
-        value.setBounds(inner.removeFromTop(13));
+        auto inner = card.reduced(8, 0);
+        value.setBounds(inner.removeFromTop(12));
         value.setJustificationType(juce::Justification::centred);
-        hint.setBounds({}); // ranges live visually on the dial arc, not as clutter
-        caption.setBounds(inner.removeFromBottom(12));
+        hint.setBounds({});
+        caption.setBounds(inner.removeFromBottom(10));
         caption.setJustificationType(juce::Justification::centred);
-        knob.setBounds(inner.reduced(large ? 0 : 2, 0));
+        knob.setBounds(inner);
     };
 
-    placeKnob(knobsRow.removeFromLeft(sideW), freqValueLabel, freqKnob, freqCaption, freqRangeHint, false);
-    knobsRow.removeFromLeft(5);
-    placeKnob(knobsRow.removeFromLeft(centerW), gainValueLabel, gainKnob, gainCaption, gainRangeHint, true);
-    knobsRow.removeFromLeft(5);
-    placeKnob(knobsRow, qValueLabel, qKnob, qCaption, qRangeHint, false);
+    placeKnob(knobsRow.removeFromLeft(knobW), freqValueLabel, freqKnob, freqCaption, freqRangeHint);
+    placeKnob(knobsRow.removeFromLeft(knobW), gainValueLabel, gainKnob, gainCaption, gainRangeHint);
+    placeKnob(knobsRow, qValueLabel, qKnob, qCaption, qRangeHint);
 
     inspectorTitle.setBounds({});
     bandOptionsLabel.setBounds({});
@@ -866,19 +860,19 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     qRangeHint.setVisible(false);
 
     r.removeFromTop(2);
-    auto opt = r.removeFromTop(22);
+    auto opt = r.removeFromTop(16);
     if (showSlope)
     {
-        slopeLabel.setBounds(opt.removeFromLeft(36).withTrimmedTop(4));
+        slopeLabel.setBounds(opt.removeFromLeft(36).withTrimmedTop(2));
         slopeSlider.setBounds(opt.removeFromLeft(88));
         opt.removeFromLeft(4);
-        brickwallButton.setBounds(opt.removeFromLeft(70).withHeight(18));
+        brickwallButton.setBounds(opt.removeFromLeft(70).withHeight(16));
         opt.removeFromLeft(6);
     }
-    stereoLabel.setBounds(opt.removeFromLeft(38).withTrimmedTop(4));
-    stereoModeBox.setBounds(opt.removeFromLeft(92).withHeight(18));
+    stereoLabel.setBounds(opt.removeFromLeft(38).withTrimmedTop(2));
+    stereoModeBox.setBounds(opt.removeFromLeft(86).withHeight(16));
     opt.removeFromLeft(4);
-    balanceLabel.setBounds(opt.removeFromLeft(22).withTrimmedTop(4));
+    balanceLabel.setBounds(opt.removeFromLeft(22).withTrimmedTop(2));
     balanceSlider.setBounds(opt.removeFromLeft(juce::jmax(50, opt.getWidth())));
 
     if (dynOpen)
@@ -930,9 +924,9 @@ void PlaymakersEQAudioProcessorEditor::updateMetricModeVisibility(bool hasSelect
     freqKnob.setVisible(hasSelection && knobs);
     gainKnob.setVisible(hasSelection && knobs);
     qKnob.setVisible(hasSelection);
-    freqRangeHint.setVisible(hasSelection && knobs);
-    gainRangeHint.setVisible(hasSelection && knobs);
-    qRangeHint.setVisible(hasSelection && knobs);
+    freqRangeHint.setVisible(hasSelection && !knobs);
+    gainRangeHint.setVisible(hasSelection && !knobs);
+    qRangeHint.setVisible(hasSelection && !knobs);
     floatingBandPanel.setVisible(hasSelection && knobs);
 
     if (knobs)

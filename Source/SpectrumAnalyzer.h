@@ -3,6 +3,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <atomic>
+#include <vector>
 #include "Params.h"
 #include "FilterBand.h"
 #include "Theme.h"
@@ -46,8 +47,11 @@ public:
         std::fill(fftData.begin() + fftSize, fftData.end(), 0.0f);
         fft.performFrequencyOnlyForwardTransform(fftData.data());
 
+        // JUCE's real FFT is unnormalized. 2/N restores a 0 dBFS sine (Hann + single-sided)
+        // to ~0 dB so the display isn't pinned to the top of the graph.
+        constexpr float norm = 2.0f / (float) fftSize;
         for (int i = 0; i < fftSize / 2; ++i)
-            magnitudesDb[(size_t) i] = juce::Decibels::gainToDecibels(fftData[(size_t) i], -100.0f);
+            magnitudesDb[(size_t) i] = juce::Decibels::gainToDecibels(fftData[(size_t) i] * norm, -100.0f);
 
         return true;
     }
@@ -61,6 +65,15 @@ private:
     bool nextBlockReady = false;
 };
 
+// Lock-free stereo output meter: audio thread writes, UI thread reads.
+struct OutputMeterState
+{
+    std::atomic<float> peakL { -100.0f };
+    std::atomic<float> peakR { -100.0f };
+    std::atomic<float> holdL { -100.0f };
+    std::atomic<float> holdR { -100.0f };
+};
+
 // Spectrum + band curves with direct interaction (Phase 5): create, drag, Q, delete, multi-select.
 class SpectrumAnalyzerComponent : public juce::Component, private juce::Timer
 {
@@ -70,7 +83,8 @@ public:
                                AnalyzerDataProvider& preAnalyzerToRead,
                                double& sampleRateToRead,
                                const Theme& themeToUse,
-                               std::array<std::atomic<float>, Params::numBands>* dynOffsetsToRead);
+                               std::array<std::atomic<float>, Params::numBands>* dynOffsetsToRead,
+                               const OutputMeterState* outputMetersToRead = nullptr);
     ~SpectrumAnalyzerComponent() override;
 
     void paint(juce::Graphics& g) override;
@@ -119,7 +133,19 @@ private:
     static float dbToY(float db, float height, float minDb, float maxDb);
     static float yToDb(float y, float height, float minDb, float maxDb);
 
-    void drawGrid(juce::Graphics& g, juce::Rectangle<float> bounds);
+    struct RailLayout
+    {
+        juce::Rectangle<float> graph;
+        juce::Rectangle<float> eqScale;
+        juce::Rectangle<float> specScale;
+        juce::Rectangle<float> meters;
+    };
+
+    RailLayout layoutRail() const;
+    void drawDbGrid(juce::Graphics& g, juce::Rectangle<float> graph, juce::Rectangle<float> eqScale);
+    void drawFrequencyGrid(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void drawSpectrumScale(juce::Graphics& g, juce::Rectangle<float> specScale, juce::Rectangle<float> graph);
+    void drawOutputMeters(juce::Graphics& g, juce::Rectangle<float> meterArea, juce::Rectangle<float> graph);
     void drawSpectrum(juce::Graphics& g, juce::Rectangle<float> bounds);
     void drawSpectrumTrace(juce::Graphics& g, juce::Rectangle<float> bounds,
                            const std::array<float, AnalyzerDataProvider::fftSize / 2>& magnitudesDb,
@@ -177,6 +203,7 @@ private:
     double& sampleRate;
     const Theme& theme;
     std::array<std::atomic<float>, Params::numBands>* dynOffsets = nullptr;
+    const OutputMeterState* outputMeters = nullptr;
     std::array<float, Params::numBands> smoothedDynOffsetDb {};
     std::array<float, AnalyzerDataProvider::fftSize / 2> latestPostMagnitudesDb {};
     std::array<float, AnalyzerDataProvider::fftSize / 2> smoothedPostMagnitudesDb {};
@@ -252,6 +279,8 @@ private:
 
     static constexpr int curveResolution = 384;
     static constexpr float dynOffsetRebuildThresholdDb = 0.1f;
+    std::vector<float> spectrumDrawY;
+    std::vector<float> spectrumDrawScratch;
     static constexpr float spectrumAttack = 0.22f;
     static constexpr float spectrumRelease = 0.08f;
     static constexpr float handleHitRadiusPx = 14.0f;
@@ -259,4 +288,8 @@ private:
     static constexpr float lowZoneMaxHz = 250.0f;
     static constexpr float highZoneMinHz = 5000.0f;
     static constexpr float defaultQ = 0.707f;
+    static constexpr float railWidth = 74.0f;
+    static constexpr float eqScaleWidth = 28.0f;
+    static constexpr float specScaleWidth = 22.0f;
+    static constexpr float meterWidth = 24.0f;
 };

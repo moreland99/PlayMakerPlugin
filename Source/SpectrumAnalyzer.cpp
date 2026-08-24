@@ -6,9 +6,11 @@ SpectrumAnalyzerComponent::SpectrumAnalyzerComponent(juce::AudioProcessorValueTr
                                                        AnalyzerDataProvider& preAnalyzerToRead,
                                                        double& sampleRateToRead,
                                                        const Theme& themeToUse,
-                                                       std::array<std::atomic<float>, Params::numBands>* dynOffsetsToRead)
+                                                       std::array<std::atomic<float>, Params::numBands>* dynOffsetsToRead,
+                                                       const OutputMeterState* outputMetersToRead)
     : apvts(stateToRead), postAnalyzer(postAnalyzerToRead), preAnalyzer(preAnalyzerToRead),
-      sampleRate(sampleRateToRead), theme(themeToUse), dynOffsets(dynOffsetsToRead)
+      sampleRate(sampleRateToRead), theme(themeToUse), dynOffsets(dynOffsetsToRead),
+      outputMeters(outputMetersToRead)
 {
     startTimerHz(30);
 }
@@ -134,7 +136,7 @@ void SpectrumAnalyzerComponent::timerCallback()
         curveCacheValid = false;
 
     const bool gestureActive = gesture != Gesture::none || createPreviewActive;
-    if (gotPost || gotPre || !curveCacheValid || gestureActive)
+    if (gotPost || gotPre || !curveCacheValid || gestureActive || outputMeters != nullptr)
         repaint();
 }
 
@@ -164,31 +166,50 @@ float SpectrumAnalyzerComponent::yToDb(float y, float height, float minDb, float
     return minDb + norm * (maxDb - minDb);
 }
 
-void SpectrumAnalyzerComponent::paint(juce::Graphics& g)
+SpectrumAnalyzerComponent::RailLayout SpectrumAnalyzerComponent::layoutRail() const
 {
     auto bounds = getLocalBounds().toFloat();
-    g.setColour(theme.background);
-    g.fillRect(bounds);
+    auto rail = bounds.removeFromRight(railWidth);
+    auto meters = rail.removeFromRight(meterWidth);
+    auto spec = rail.removeFromRight(specScaleWidth);
+    return { bounds, rail, spec, meters };
+}
 
-    const bool boundsChanged = cachedCurveWidth != (int) bounds.getWidth()
-                            || cachedCurveHeight != (int) bounds.getHeight();
+void SpectrumAnalyzerComponent::paint(juce::Graphics& g)
+{
+    const auto layout = layoutRail();
+    auto full = getLocalBounds().toFloat();
+    g.setColour(theme.background);
+    g.fillRect(full);
+
+    g.setColour(theme.panel.withAlpha(theme.isLight() ? 0.35f : 0.55f));
+    g.fillRect(juce::Rectangle<float>(layout.eqScale.getX(), full.getY(),
+                                      full.getRight() - layout.eqScale.getX(), full.getHeight()));
+    g.setColour(theme.grid.withAlpha(0.35f));
+    g.drawVerticalLine((int) layout.eqScale.getX(), full.getY(), full.getBottom());
+
+    const bool boundsChanged = cachedCurveWidth != (int) layout.graph.getWidth()
+                            || cachedCurveHeight != (int) layout.graph.getHeight();
     const bool rangeChanged = std::abs(cachedCurveSampleRate - sampleRate) > 0.5
                            || std::abs(cachedCurveMinDb - curveMinDb) > 0.01f
                            || std::abs(cachedCurveMaxDb - curveMaxDb) > 0.01f;
     if (!curveCacheValid || boundsChanged || rangeChanged || curveParamsChanged())
-        rebuildCurveCache(bounds);
+        rebuildCurveCache(layout.graph);
 
-    drawGrid(g, bounds);
-    drawSpectrum(g, bounds);
+    drawDbGrid(g, layout.graph, layout.eqScale);
+    drawSpectrum(g, layout.graph);
+    drawFrequencyGrid(g, layout.graph);
     drawBandCurves(g);
     drawCombinedCurve(g);
-    drawCreatePreview(g, bounds);
-    drawBandHandles(g, bounds);
-    drawSelectionReadout(g, bounds);
+    drawCreatePreview(g, layout.graph);
+    drawBandHandles(g, layout.graph);
+    drawSelectionReadout(g, layout.graph);
     drawMarquee(g);
+    drawSpectrumScale(g, layout.specScale, layout.graph);
+    drawOutputMeters(g, layout.meters, layout.graph);
 
     if (countEnabledBands() == 0 && !createPreviewActive)
-        drawEmptyState(g, bounds);
+        drawEmptyState(g, layout.graph);
 }
 
 void SpectrumAnalyzerComponent::drawEmptyState(juce::Graphics& g, juce::Rectangle<float> bounds)
@@ -227,49 +248,140 @@ bool SpectrumAnalyzerComponent::bandAudibleInChain(int bandIndex) const
     return true;
 }
 
-void SpectrumAnalyzerComponent::drawGrid(juce::Graphics& g, juce::Rectangle<float> bounds)
+void SpectrumAnalyzerComponent::drawDbGrid(juce::Graphics& g, juce::Rectangle<float> graph,
+                                           juce::Rectangle<float> eqScale)
 {
-    // Subtle vertical decade lines + labelled anchors (easier surgical targeting).
+    const float half = displayRangeHalfDb;
+    const float quarter = half * 0.5f;
+    g.setFont(Brand::uiFont(9.5f));
+    for (float db : { -half, -quarter, 0.0f, quarter, half })
+    {
+        const float y = graph.getY() + dbToY(db, graph.getHeight(), curveMinDb, curveMaxDb);
+        const bool zero = std::abs(db) < 0.01f;
+        g.setColour(theme.grid.withAlpha(zero ? 0.9f : 0.55f));
+        g.drawHorizontalLine((int) y, graph.getX(), graph.getRight());
+
+        auto dbLabel = juce::Rectangle<float>(eqScale.getX(), y - 7.0f, eqScale.getWidth() - 2.0f, 12.0f)
+                           .constrainedWithin(eqScale.reduced(1.0f, 2.0f));
+        g.setColour(theme.ink.withAlpha(theme.isLight() ? 0.55f : 0.48f));
+        g.drawText(juce::String((int) std::lround(db)),
+                   dbLabel, juce::Justification::centredRight, false);
+    }
+}
+
+void SpectrumAnalyzerComponent::drawFrequencyGrid(juce::Graphics& g, juce::Rectangle<float> bounds)
+{
     struct FreqMark { float hz; const char* label; };
-    const FreqMark marks[] = {
-        { 20.0f, "20" }, { 50.0f, "" }, { 100.0f, "100" }, { 200.0f, "" },
-        { 500.0f, "" }, { 1000.0f, "1k" }, { 2000.0f, "" }, { 5000.0f, "" },
-        { 10000.0f, "10k" }, { 20000.0f, "20k" }
+    constexpr FreqMark marks[] = {
+        { 20.0f, "20" }, { 50.0f, "50" }, { 100.0f, "100" }, { 200.0f, "200" }, { 500.0f, "500" },
+        { 1000.0f, "1k" }, { 2000.0f, "2k" }, { 5000.0f, "5k" }, { 10000.0f, "10k" }, { 20000.0f, "20k" }
     };
 
     g.setFont(Brand::uiFont(9.5f));
     for (const auto& m : marks)
     {
         const float x = bounds.getX() + freqToX(m.hz, bounds.getWidth());
-        const bool major = m.label[0] != '\0';
-        g.setColour(theme.grid.withAlpha(major ? 0.55f : 0.28f));
-        g.drawVerticalLine((int) x, bounds.getY(), bounds.getBottom());
-        if (major)
-        {
-            g.setColour(theme.ink.withAlpha(theme.isLight() ? 0.45f : 0.32f));
-            g.drawText(m.label,
-                       juce::Rectangle<float>(x - 16.0f, bounds.getBottom() - 14.0f, 32.0f, 12.0f),
-                       juce::Justification::centred, false);
-        }
-    }
+        g.setColour(theme.grid.withAlpha(0.72f));
+        auto line = juce::Rectangle<float>(x - 1.0f, bounds.getY(), 2.0f, bounds.getHeight())
+                        .getIntersection(bounds);
+        g.fillRect(line);
 
-    const float half = displayRangeHalfDb;
-    const float quarter = half * 0.5f;
-    for (float db : { -half, -quarter, 0.0f, quarter, half })
-    {
-        const float y = bounds.getY() + dbToY(db, bounds.getHeight(), curveMinDb, curveMaxDb);
-        const bool zero = std::abs(db) < 0.01f;
-        const bool labelled = zero || std::abs(std::abs(db) - quarter) < 0.01f || std::abs(std::abs(db) - half) < 0.01f;
-        g.setColour(theme.grid.withAlpha(zero ? 0.9f : 0.55f));
-        g.drawHorizontalLine((int) y, bounds.getX(), bounds.getRight());
-        if (labelled)
+        juce::Rectangle<float> labelArea (x - 16.0f, bounds.getBottom() - 14.0f, 32.0f, 12.0f);
+        auto justification = juce::Justification::centred;
+        if (x < bounds.getX() + 24.0f)
         {
-            g.setColour(theme.ink.withAlpha(theme.isLight() ? 0.40f : 0.28f));
-            g.drawText(juce::String((int) std::lround(db)),
-                       juce::Rectangle<float>(bounds.getRight() - 30.0f, y - 7.0f, 28.0f, 12.0f),
-                       juce::Justification::centredRight, false);
+            labelArea = { bounds.getX() + 2.0f, bounds.getBottom() - 14.0f, 28.0f, 12.0f };
+            justification = juce::Justification::centredLeft;
         }
+        else if (x > bounds.getRight() - 24.0f)
+        {
+            labelArea = { bounds.getRight() - 30.0f, bounds.getBottom() - 14.0f, 28.0f, 12.0f };
+            justification = juce::Justification::centredRight;
+        }
+
+        labelArea = labelArea.constrainedWithin(bounds.reduced(2.0f));
+        g.setColour(theme.ink.withAlpha(theme.isLight() ? 0.50f : 0.42f));
+        g.drawText(m.label, labelArea, justification, false);
     }
+}
+
+void SpectrumAnalyzerComponent::drawSpectrumScale(juce::Graphics& g, juce::Rectangle<float> specScale,
+                                                  juce::Rectangle<float> graph)
+{
+    if (!showPostSpectrum && !showPreSpectrum)
+        return;
+
+    g.setFont(Brand::uiFont(8.5f));
+    const float minDb = -spectrumSpanDb;
+    float lastY = -1000.0f;
+    for (float db = 0.0f; db >= minDb - 0.01f; db -= 10.0f)
+    {
+        const float y = graph.getY() + dbToY(db, graph.getHeight(), minDb, 0.0f);
+        if (std::abs(y - lastY) < 11.0f)
+            continue;
+        lastY = y;
+
+        auto label = juce::Rectangle<float>(specScale.getX(), y - 6.0f, specScale.getWidth() - 1.0f, 12.0f)
+                         .constrainedWithin(specScale.reduced(0.0f, 1.0f));
+        g.setColour(theme.ink.withAlpha(theme.isLight() ? 0.38f : 0.30f));
+        g.drawText(juce::String((int) std::lround(db)),
+                   label, juce::Justification::centredRight, false);
+    }
+}
+
+void SpectrumAnalyzerComponent::drawOutputMeters(juce::Graphics& g, juce::Rectangle<float> meterArea,
+                                                 juce::Rectangle<float> graph)
+{
+    if (outputMeters == nullptr)
+        return;
+
+    const float peakL = outputMeters->peakL.load(std::memory_order_relaxed);
+    const float peakR = outputMeters->peakR.load(std::memory_order_relaxed);
+    const float holdL = outputMeters->holdL.load(std::memory_order_relaxed);
+    const float holdR = outputMeters->holdR.load(std::memory_order_relaxed);
+    const float holdDb = juce::jmax(holdL, holdR);
+
+    auto readout = meterArea.removeFromTop(14.0f);
+    g.setFont(Brand::uiFont(8.0f, true));
+    g.setColour(holdDb > -0.1f ? juce::Colour(0xffeb5757)
+                               : theme.ink.withAlpha(theme.isLight() ? 0.55f : 0.48f));
+    const auto readoutText = holdDb <= -99.0f ? juce::String("-inf")
+                                              : juce::String(holdDb, 1);
+    g.drawText(readoutText, readout.reduced(1.0f, 0.0f), juce::Justification::centred, false);
+
+    auto bars = meterArea.reduced(3.0f, 4.0f);
+    const float gap = 2.0f;
+    const float barW = juce::jmax(4.0f, (bars.getWidth() - gap) * 0.5f);
+    const auto leftBar = bars.removeFromLeft(barW);
+    bars.removeFromLeft(gap);
+    const auto rightBar = bars.removeFromLeft(barW);
+
+    const float specMin = -spectrumSpanDb;
+    auto drawBar = [&] (juce::Rectangle<float> slot, float peakDb, float holdPeak)
+    {
+        g.setColour(theme.charcoalBlack.withAlpha(theme.isLight() ? 0.12f : 0.45f));
+        g.fillRect(slot);
+
+        const float y = graph.getY() + dbToY(peakDb, graph.getHeight(), specMin, 0.0f);
+        auto fill = slot.withTop(juce::jlimit(slot.getY(), slot.getBottom(), y));
+        if (fill.getHeight() > 0.5f)
+        {
+            juce::ColourGradient grad (juce::Colour(0xffeb5757), slot.getX(), slot.getY(),
+                                       juce::Colour(0xff1f6b3a), slot.getX(), slot.getBottom(), false);
+            grad.addColour(0.12, theme.signalOrange);
+            grad.addColour(0.42, juce::Colour(0xff6fcf97));
+            g.setGradientFill(grad);
+            g.fillRect(fill);
+        }
+
+        const float holdY = graph.getY() + dbToY(holdPeak, graph.getHeight(), specMin, 0.0f);
+        const float tickY = juce::jlimit(slot.getY(), slot.getBottom() - 1.0f, holdY);
+        g.setColour(theme.softWhite.withAlpha(0.85f));
+        g.fillRect(slot.getX(), tickY, slot.getWidth(), 1.5f);
+    };
+
+    drawBar(leftBar, peakL, holdL);
+    drawBar(rightBar, peakR, holdR);
 }
 
 void SpectrumAnalyzerComponent::drawSpectrumTrace(juce::Graphics& g, juce::Rectangle<float> bounds,
@@ -281,42 +393,59 @@ void SpectrumAnalyzerComponent::drawSpectrumTrace(juce::Graphics& g, juce::Recta
 
     const float specMinDb = -spectrumSpanDb;
     const float specMaxDb = 0.0f;
-
-    juce::Path path;
     const auto width = bounds.getWidth();
     const auto height = bounds.getHeight();
+    const int columns = juce::jmax(2, (int) std::ceil(width));
     const int lastBin = AnalyzerDataProvider::fftSize / 2 - 1;
-    bool started = false;
+    const float binScale = (float) AnalyzerDataProvider::fftSize / (float) sampleRate;
 
-    constexpr int step = 2;
-    for (int x = 0; x < (int) width; x += step)
+    auto magAtFreq = [&] (float freq)
+    {
+        const float binF = juce::jlimit(1.0f, (float) lastBin, freq * binScale);
+        const int i0 = juce::jlimit(1, lastBin - 1, (int) binF);
+        const float t = juce::jlimit(0.0f, 1.0f, binF - (float) i0);
+        return magnitudesDb[(size_t) i0] + t * (magnitudesDb[(size_t) i0 + 1] - magnitudesDb[(size_t) i0]);
+    };
+
+    spectrumDrawY.resize((size_t) columns);
+    for (int x = 0; x < columns; ++x)
     {
         const float freqL = xToFreq((float) x, width);
-        const float freqR = xToFreq((float) juce::jmin((int) width, x + step), width);
-        const int binL = juce::jlimit(1, lastBin,
-            (int) (freqL * (float) AnalyzerDataProvider::fftSize / (float) sampleRate));
-        const int binR = juce::jlimit(1, lastBin,
-            (int) (freqR * (float) AnalyzerDataProvider::fftSize / (float) sampleRate));
+        const float freqR = xToFreq((float) juce::jmin(columns, x + 1), width);
+        const int binL = juce::jlimit(1, lastBin, (int) (freqL * binScale));
+        const int binR = juce::jlimit(1, lastBin, (int) (freqR * binScale));
 
-        float peak = -100.0f;
-        for (int b = binL; b <= juce::jmax(binL, binR); ++b)
-            peak = juce::jmax(peak, magnitudesDb[(size_t) b]);
-
-        const float y = bounds.getY() + dbToY(peak, height, specMinDb, specMaxDb);
-
-        if (!started)
+        float peak = magAtFreq(freqL);
+        if (binR > binL)
         {
-            path.startNewSubPath(bounds.getX() + (float) x, y);
-            started = true;
+            for (int b = binL; b <= binR; ++b)
+                peak = juce::jmax(peak, magnitudesDb[(size_t) b]);
         }
         else
         {
-            path.lineTo(bounds.getX() + (float) x, y);
+            peak = juce::jmax(peak, magAtFreq(freqR));
         }
+
+        spectrumDrawY[(size_t) x] = dbToY(peak, height, specMinDb, specMaxDb);
     }
 
-    if (!started)
-        return;
+    spectrumDrawScratch = spectrumDrawY;
+    for (int pass = 0; pass < 3; ++pass)
+    {
+        auto& src = (pass & 1) ? spectrumDrawY : spectrumDrawScratch;
+        auto& dst = (pass & 1) ? spectrumDrawScratch : spectrumDrawY;
+        dst[0] = src[0];
+        dst[(size_t) columns - 1] = src[(size_t) columns - 1];
+        for (int x = 1; x < columns - 1; ++x)
+            dst[(size_t) x] = 0.20f * src[(size_t) (x - 1)]
+                            + 0.60f * src[(size_t) x]
+                            + 0.20f * src[(size_t) (x + 1)];
+    }
+
+    juce::Path path;
+    path.startNewSubPath(bounds.getX(), bounds.getY() + spectrumDrawY[0]);
+    for (int x = 1; x < columns; ++x)
+        path.lineTo(bounds.getX() + (float) x, bounds.getY() + spectrumDrawY[(size_t) x]);
 
     if (fillAlpha > 0.001f)
     {
@@ -329,7 +458,7 @@ void SpectrumAnalyzerComponent::drawSpectrumTrace(juce::Graphics& g, juce::Recta
     }
 
     g.setColour(stroke);
-    g.strokePath(path, juce::PathStrokeType(1.1f, juce::PathStrokeType::curved,
+    g.strokePath(path, juce::PathStrokeType(1.35f, juce::PathStrokeType::curved,
                                              juce::PathStrokeType::rounded));
 }
 
@@ -753,7 +882,7 @@ int SpectrumAnalyzerComponent::getPrimarySelectedBand() const
 juce::Point<float> SpectrumAnalyzerComponent::getPrimaryHandlePosition() const
 {
     const int band = getPrimarySelectedBand();
-    auto bounds = getLocalBounds().toFloat();
+    const auto bounds = layoutRail().graph;
     if (band < 0)
         return bounds.getCentre();
     return handlePosition(band, bounds);
@@ -996,8 +1125,13 @@ void SpectrumAnalyzerComponent::commitCreateAt(float freqHz, float gainDb)
 
 void SpectrumAnalyzerComponent::mouseDown(const juce::MouseEvent& e)
 {
-    const auto bounds = getLocalBounds().toFloat();
+    const auto bounds = layoutRail().graph;
     const auto pos = e.position;
+    if (!bounds.contains(pos) && hitTestBand(pos, bounds) < 0)
+    {
+        gesture = Gesture::none;
+        return;
+    }
     gestureStartPos = pos;
     gestureCurrentPos = pos;
     createPreviewActive = false;
@@ -1073,7 +1207,7 @@ void SpectrumAnalyzerComponent::mouseDown(const juce::MouseEvent& e)
 
 void SpectrumAnalyzerComponent::mouseDrag(const juce::MouseEvent& e)
 {
-    const auto bounds = getLocalBounds().toFloat();
+    const auto bounds = layoutRail().graph;
     gestureCurrentPos = e.position;
 
     if (gesture == Gesture::dragBand && primaryBand >= 0)
@@ -1141,7 +1275,7 @@ void SpectrumAnalyzerComponent::mouseDrag(const juce::MouseEvent& e)
 void SpectrumAnalyzerComponent::mouseUp(const juce::MouseEvent& e)
 {
     juce::ignoreUnused(e);
-    const auto bounds = getLocalBounds().toFloat();
+    const auto bounds = layoutRail().graph;
 
     if (gesture == Gesture::dragBand)
     {
@@ -1175,7 +1309,10 @@ void SpectrumAnalyzerComponent::mouseDoubleClick(const juce::MouseEvent& e)
     if (e.mods.isAltDown())
         return;
 
-    const auto bounds = getLocalBounds().toFloat();
+    const auto bounds = layoutRail().graph;
+    if (!bounds.contains(e.position))
+        return;
+
     const auto freq = xToFreq(e.position.x - bounds.getX(), bounds.getWidth());
     const auto gain = yToDb(e.position.y - bounds.getY(), bounds.getHeight(), curveMinDb, curveMaxDb);
     commitCreateAt(freq, gain);
@@ -1185,7 +1322,7 @@ void SpectrumAnalyzerComponent::mouseDoubleClick(const juce::MouseEvent& e)
 
 void SpectrumAnalyzerComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {
-    const auto bounds = getLocalBounds().toFloat();
+    const auto bounds = layoutRail().graph;
     int target = hitTestBand(e.position, bounds);
 
     if (target < 0 && selectedBands.size() == 1)

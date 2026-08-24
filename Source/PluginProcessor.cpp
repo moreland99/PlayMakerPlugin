@@ -333,6 +333,54 @@ void PlaymakersEQAudioProcessor::applyOutputGain(float* leftData, float* rightDa
     }
 }
 
+void PlaymakersEQAudioProcessor::updateOutputMeters(const float* leftData, const float* rightData, int numSamples)
+{
+    float pkL = 0.0f, pkR = 0.0f;
+    for (int n = 0; n < numSamples; ++n)
+    {
+        pkL = juce::jmax(pkL, std::abs(leftData[n]));
+        pkR = juce::jmax(pkR, std::abs(rightData != nullptr ? rightData[n] : leftData[n]));
+    }
+
+    const float dbL = juce::Decibels::gainToDecibels(pkL, -100.0f);
+    const float dbR = juce::Decibels::gainToDecibels(pkR, -100.0f);
+    const float dt = (float) numSamples / (float) juce::jmax(1.0, currentSampleRate);
+    const float release = 1.0f - std::exp(-dt / 0.30f);
+    const int holdSamples = (int) std::lround(1.5 * juce::jmax(1.0, currentSampleRate));
+
+    auto follow = [release] (float& env, float target)
+    {
+        if (target > env)
+            env = target;
+        else
+            env += (target - env) * release;
+    };
+    follow(meterEnvL, dbL);
+    follow(meterEnvR, dbR);
+
+    auto hold = [holdSamples, numSamples] (float& held, int& remaining, float env, float instant)
+    {
+        if (instant >= held)
+        {
+            held = instant;
+            remaining = holdSamples;
+        }
+        else
+        {
+            remaining -= numSamples;
+            if (remaining <= 0)
+                held = env;
+        }
+    };
+    hold(meterHoldL, meterHoldSamplesL, meterEnvL, dbL);
+    hold(meterHoldR, meterHoldSamplesR, meterEnvR, dbR);
+
+    outputMeters.peakL.store(meterEnvL, std::memory_order_relaxed);
+    outputMeters.peakR.store(meterEnvR, std::memory_order_relaxed);
+    outputMeters.holdL.store(meterHoldL, std::memory_order_relaxed);
+    outputMeters.holdR.store(meterHoldR, std::memory_order_relaxed);
+}
+
 void PlaymakersEQAudioProcessor::pushPostAnalyzerFromBus(float* leftData, float* rightData, int numSamples)
 {
     if (rightData != nullptr)
@@ -387,6 +435,7 @@ void PlaymakersEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
             dynDisplayOffsetDb[(size_t) i].store(0.0f, std::memory_order_relaxed);
 
         applyOutputGain(leftData, rightData, numSamples);
+        updateOutputMeters(leftData, rightData, numSamples);
         pushPostAnalyzerFromBus(leftData, rightData, numSamples);
         return;
     }
@@ -474,6 +523,7 @@ void PlaymakersEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
     }
 
     applyOutputGain(leftData, rightData, numSamples);
+    updateOutputMeters(leftData, rightData, numSamples);
     pushPostAnalyzerFromBus(leftData, rightData, numSamples);
 }
 

@@ -54,6 +54,7 @@ public:
     bool isOnSlotA() const { return onSlotA; }
 
     float getDynDetectionMeterDb(int bandIndex) const;
+    const OutputMeterState& getOutputMeters() const { return outputMeters; }
 
     std::array<std::atomic<float>, Params::numBands> dynDisplayOffsetDb {};
 
@@ -69,6 +70,7 @@ private:
     void processStereoBand(int bandIndex, float* leftData, float* rightData, int numSamples);
     void applyOutputGain(float* leftData, float* rightData, int numSamples);
     void pushPostAnalyzerFromBus(float* leftData, float* rightData, int numSamples);
+    void updateOutputMeters(const float* leftData, const float* rightData, int numSamples);
 
     struct BandSmoothers
     {
@@ -107,6 +109,13 @@ private:
     bool onSlotA = true;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> outputGainLinear { 1.0f };
     std::array<std::atomic<float>, Params::numBands> dynDetectionMeterDb {};
+    OutputMeterState outputMeters;
+    float meterEnvL = -100.0f;
+    float meterEnvR = -100.0f;
+    float meterHoldL = -100.0f;
+    float meterHoldR = -100.0f;
+    int meterHoldSamplesL = 0;
+    int meterHoldSamplesR = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PlaymakersEQAudioProcessor)
 };
