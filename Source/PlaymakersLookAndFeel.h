@@ -212,8 +212,8 @@ public:
 
         const bool large = (bool) slider.getProperties().getWithDefault("pmLargeKnob", false);
         const bool bipolar = (bool) slider.getProperties().getWithDefault("pmBipolarArc", false);
-        // Prefer parameter proportion so skewed ranges (freq) map correctly.
-        const float prop = (float) slider.valueToProportionOfLength(slider.getValue());
+        // Prefer parameter proportion so log/skewed ranges (freq) map correctly.
+        const float prop = juce::jlimit(0.0f, 1.0f, (float) slider.valueToProportionOfLength(slider.getValue()));
         const float startAng = rotaryStartAngle;
         const float endAng = rotaryEndAngle;
         const float angle = juce::jmap(prop, 0.0f, 1.0f, startAng, endAng);
@@ -225,12 +225,12 @@ public:
         const float enabledA = slider.isEnabled() ? 1.0f : 0.42f;
 
         // Fill most of the control — solid dial, not a thin “gadget” ring.
-        const float outerR = size * (large ? 0.48f : 0.46f);
-        const float arcR = outerR * 0.96f;
-        const float bodyR = outerR * 0.78f;
+        const float outerR = size * (large ? 0.49f : 0.46f);
+        const float arcR = outerR * 0.97f;
+        const float bodyR = outerR * (large ? 0.82f : 0.78f);
         const float rimR = bodyR * 0.92f;
-        const float faceR = bodyR * 0.72f;
-        const float arcW = large ? 3.6f : 2.8f;
+        const float faceR = bodyR * 0.74f;
+        const float arcW = large ? 4.2f : 2.8f;
 
         // Soft drop under the dial.
         g.setColour(juce::Colours::black.withAlpha((theme.isLight() ? 0.10f : 0.35f) * enabledA));

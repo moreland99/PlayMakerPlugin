@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
 #include "SpectrumAnalyzer.h"
+#include "BandList.h"
 #include "Theme.h"
 #include "PlaymakersLookAndFeel.h"
 #include "PresetBrowser.h"
@@ -59,6 +60,7 @@ private:
     void updateMetricModeVisibility(bool hasSelection);
     void reparentBandControlsForMode(bool knobs);
     void layoutFloatingBandPanel(juce::Rectangle<int> graphBounds);
+    void applyFloatingExtrasVisibility(bool extras);
     static float parseFrequencyText(const juce::String& text);
     static float parseFloatText(const juce::String& text);
 
@@ -66,10 +68,12 @@ private:
     ThemeManager themeManager;
     PlaymakersLookAndFeel lookAndFeel { themeManager.current() };
     SpectrumAnalyzerComponent analyzer;
+    BandListComponent bandList;
     FloatingBandPanel floatingBandPanel;
 
     juce::Rectangle<int> brandLockupBounds;
     juce::Rectangle<int> inspectorBounds;
+    juce::Rectangle<int> bandListBounds;
     juce::Rectangle<int> metricCardBounds[3];
     juce::Rectangle<int> bandOptionsBounds;
     juce::Rectangle<int> dynSectionBounds;
@@ -83,10 +87,10 @@ private:
     juce::Label buildTag;
 
     bool expandedView = false;
-    static constexpr int normalWidth = 1100;
-    static constexpr int normalHeight = 700;
-    static constexpr int expandedWidth = 1400;
-    static constexpr int expandedHeight = 860;
+    static constexpr int normalWidth = 1280;
+    static constexpr int normalHeight = 720;
+    static constexpr int expandedWidth = 1560;
+    static constexpr int expandedHeight = 900;
 
     // Selected-band inspector
     juce::Label inspectorTitle;
@@ -97,6 +101,8 @@ private:
     juce::Label gainValueLabel;
     juce::Label qValueLabel;
     juce::TextButton metricModeButton { "Knobs" };
+    juce::TextButton moreButton { "More" };
+    bool hubExtrasOpen = false;
     juce::Slider freqKnob;
     juce::Slider gainKnob;
     juce::Slider qKnob;
@@ -152,7 +158,7 @@ private:
     juce::Label dynSidechainLabel { {}, "Sidechain" };
     juce::Slider dynSidechainSlider;
     juce::Label emptyHint { {},
-        "Click a band on the graph to edit frequency, gain, Q, and dynamics in this panel.\n"
+        "Click a band on the graph or pick one from the list.\n"
         "Double-click empty space to add a band · Scroll or ⌘-drag a handle for Q · Option-click a band to remove" };
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAttachment;

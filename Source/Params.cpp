@@ -7,8 +7,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    juce::NormalisableRange<float> freqRange(20.0f, 20000.0f, 0.01f, 1.0f);
-    freqRange.setSkewForCentre(1000.0f);
+    juce::NormalisableRange<float> freqRange = frequencyRange();
 
     juce::NormalisableRange<float> gainRange(-24.0f, 24.0f, 0.01f);
     juce::NormalisableRange<float> qRange(0.1f, 18.0f, 0.001f);
