@@ -52,6 +52,13 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
         applyThemeToInspector();
         bandList.setTheme(themeManager.current());
         presetBrowser.applyTheme(themeManager.current());
+
+        setMetricKnobMode(true);
+        loadAnalyzerOptionsFromState();
+        hubExtrasOpen = (bool) eqProcessor.apvts.state.getProperty("hubExtrasOpen", false);
+        moreButton.setToggleState(hubExtrasOpen, juce::dontSendNotification);
+        moreButton.setButtonText(hubExtrasOpen ? "Less" : "More");
+
         refreshInspector();
         analyzer.repaint();
         presetBrowser.refreshFromManager();
