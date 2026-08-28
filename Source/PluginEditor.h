@@ -62,6 +62,7 @@ private:
     void reparentBandControlsForMode(bool knobs);
     void layoutFloatingBandPanel(juce::Rectangle<int> graphBounds);
     void applyFloatingExtrasVisibility(bool extras);
+    void updateDynPanelButton();
     static float parseFrequencyText(const juce::String& text);
     static float parseFloatText(const juce::String& text);
 
@@ -103,7 +104,9 @@ private:
     juce::Label qValueLabel;
     juce::TextButton metricModeButton { "Knobs" };
     juce::TextButton moreButton { "More" };
+    juce::TextButton dynPanelButton { "Dyn" };
     bool hubExtrasOpen = false;
+    bool dynPanelOpen = false;
     juce::Slider freqKnob;
     juce::Slider gainKnob;
     juce::Slider qKnob;

@@ -193,7 +193,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     };
 
     moreButton.setClickingTogglesState(true);
-    moreButton.setTooltip("Show In, Solo, dynamics, stereo, and Text mode");
+    moreButton.setTooltip("Show In, Solo, stereo, slope, and Text mode");
     hubExtrasOpen = (bool) eqProcessor.apvts.state.getProperty("hubExtrasOpen", false);
     moreButton.setToggleState(hubExtrasOpen, juce::dontSendNotification);
     moreButton.setButtonText(hubExtrasOpen ? "Less" : "More");
@@ -202,6 +202,18 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
         hubExtrasOpen = moreButton.getToggleState();
         eqProcessor.apvts.state.setProperty("hubExtrasOpen", hubExtrasOpen, nullptr);
         moreButton.setButtonText(hubExtrasOpen ? "Less" : "More");
+        resized();
+        repaint();
+    };
+
+    dynPanelButton.setClickingTogglesState(true);
+    dynPanelButton.setButtonText("Dyn");
+    dynPanelButton.getProperties().set("pmCompact", true);
+    dynPanelButton.setTooltip("Show or hide Dynamics controls. Does not turn Dynamics on or off.");
+    dynPanelButton.setToggleState(dynPanelOpen, juce::dontSendNotification);
+    dynPanelButton.onClick = [this]
+    {
+        dynPanelOpen = dynPanelButton.getToggleState();
         resized();
         repaint();
     };
@@ -337,6 +349,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     addAndMakeVisible(qValueLabel);
     addAndMakeVisible(metricModeButton);
     addAndMakeVisible(moreButton);
+    floatingBandPanel.addAndMakeVisible(dynPanelButton);
     addAndMakeVisible(freqKnob);
     addAndMakeVisible(gainKnob);
     addAndMakeVisible(qKnob);
@@ -628,8 +641,11 @@ void PlaymakersEQAudioProcessorEditor::refreshInspector()
     stereoModeBox.setVisible(hasSelection);
     balanceLabel.setVisible(hasSelection);
     balanceSlider.setVisible(hasSelection);
-    dynSectionLabel.setVisible(hasSelection);
-    dynEnableButton.setVisible(hasSelection);
+    if (!usingMetricKnobs())
+    {
+        dynSectionLabel.setVisible(hasSelection);
+        dynEnableButton.setVisible(hasSelection);
+    }
 
     if (!hasSelection)
     {
@@ -642,6 +658,9 @@ void PlaymakersEQAudioProcessorEditor::refreshInspector()
         dynAutoThresholdButton.setVisible(false);
         dynSidechainLabel.setVisible(false);
         dynSidechainSlider.setVisible(false);
+        dynEnableButton.setVisible(false);
+        dynSectionLabel.setVisible(false);
+        dynPanelButton.setVisible(false);
         updateMetricModeVisibility(false);
         bandOptionsBounds = {};
         dynSectionBounds = {};
@@ -703,25 +722,29 @@ void PlaymakersEQAudioProcessorEditor::refreshInspector()
     for (auto* kn : { &freqKnob, &gainKnob, &qKnob })
         kn->setEnabled(hasSelection && bandOn);
 
-    const bool showDynSliders = canDyn && dynOn;
-    const bool autoTrack = eqProcessor.apvts.getRawParameterValue(Params::bandParamID(primary, "dynAutoThreshold"))->load() >= 0.5f;
-    const bool showSidechain = canDyn && hasSelection;
-    for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
+    if (!usingMetricKnobs())
     {
-        s->setVisible(showDynSliders);
-        s->setEnabled(showDynSliders);
+        const bool showDynSliders = canDyn && dynOn;
+        const bool autoTrack = eqProcessor.apvts.getRawParameterValue(Params::bandParamID(primary, "dynAutoThreshold"))->load() >= 0.5f;
+        const bool showSidechain = canDyn && hasSelection;
+        for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
+        {
+            s->setVisible(showDynSliders);
+            s->setEnabled(showDynSliders);
+        }
+        dynThresholdSlider.setEnabled(showDynSliders && !autoTrack);
+        dynThresholdAutoButton.setVisible(showDynSliders);
+        dynThresholdAutoButton.setEnabled(showDynSliders);
+        dynAutoThresholdButton.setVisible(showDynSliders);
+        dynAutoThresholdButton.setEnabled(showDynSliders);
+        for (auto* l : { &dynThresholdLabel, &dynRangeLabel, &dynRatioLabel, &dynAttackLabel, &dynReleaseLabel })
+            l->setVisible(showDynSliders);
+        dynSidechainLabel.setVisible(showSidechain);
+        dynSidechainSlider.setVisible(showSidechain);
+        dynSidechainSlider.setEnabled(showSidechain);
     }
-    dynThresholdSlider.setEnabled(showDynSliders && !autoTrack);
-    dynThresholdAutoButton.setVisible(showDynSliders);
-    dynThresholdAutoButton.setEnabled(showDynSliders);
-    dynAutoThresholdButton.setVisible(showDynSliders);
-    dynAutoThresholdButton.setEnabled(showDynSliders);
-    for (auto* l : { &dynThresholdLabel, &dynRangeLabel, &dynRatioLabel, &dynAttackLabel, &dynReleaseLabel })
-        l->setVisible(showDynSliders);
     updateDynRangeLabelForBand(primary);
-    dynSidechainLabel.setVisible(showSidechain);
-    dynSidechainSlider.setVisible(showSidechain);
-    dynSidechainSlider.setEnabled(showSidechain);
+    updateDynPanelButton();
 
     updatingInspector = false;
     applyBandAccentToInspector(primary);
@@ -765,7 +788,7 @@ void PlaymakersEQAudioProcessorEditor::timerCallback()
         qValueLabel.setText(juce::String(q, 2), juce::dontSendNotification);
     }
 
-    if (wantDynSliders != dynThresholdSlider.isVisible() && (!usingMetricKnobs() || hubExtrasOpen))
+    if (wantDynSliders != dynThresholdSlider.isVisible() && (!usingMetricKnobs() || dynPanelOpen))
         refreshInspector();
 
     if (primary >= 0)
@@ -839,6 +862,7 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     {
         floatingBandPanel.setVisible(false);
         moreButton.setVisible(false);
+        dynPanelButton.setVisible(false);
         return;
     }
 
@@ -849,15 +873,14 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         && eqProcessor.apvts.getRawParameterValue(Params::bandParamID(primary, "dynEnabled"))->load() >= 0.5f;
     const bool canSlope = Params::typeSupportsSlope(type);
     const bool extras = hubExtrasOpen;
-    const bool dynOpen = extras && dynEnabled;
+    const bool dynOpen = dynPanelOpen && canDyn;
     const bool showSlope = extras && canSlope;
-    const bool showSidechain = extras && canDyn;
+    const bool showDynSliders = dynOpen && dynEnabled;
 
     const int knobsH = 118;
     const int headH = 22;
-    const int extrasH = extras
-        ? (22 + 18 + (dynOpen ? 36 : 0) + (showSidechain ? 18 : 0) + 6)
-        : 0;
+    const int extrasH = extras ? (22 + 18 + 6) : 0;
+    const int dynH = dynOpen ? (8 + 20 + (showDynSliders ? 90 : 0)) : 0;
     if (freqKnob.isMouseButtonDown() || gainKnob.isMouseButtonDown() || qKnob.isMouseButtonDown())
         return;
 
@@ -866,8 +889,8 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     if (plot.getWidth() < 8)
         plot = graphBounds;
 
-    const int panelW = juce::jmin(extras ? 520 : 456, juce::jmax(400, plot.getWidth() - 16));
-    const int panelH = 10 + headH + extrasH + knobsH + 8;
+    const int panelW = juce::jmin((extras || dynOpen) ? 540 : 456, juce::jmax(400, plot.getWidth() - 16));
+    const int panelH = 10 + headH + extrasH + knobsH + dynH + 8;
 
     auto handle = analyzer.getPrimaryHandlePosition().toInt() + origin;
     const int margin = 6;
@@ -930,7 +953,6 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         bandEnabledButton.setButtonText("In");
         bandEnabledButton.setVisible(true);
         bandSoloButton.setVisible(true);
-        dynEnableButton.setVisible(true);
         removeButton.setVisible(true);
         metricModeButton.setVisible(true);
         slopeLabel.setVisible(showSlope);
@@ -940,20 +962,9 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         stereoModeBox.setVisible(true);
         balanceLabel.setVisible(true);
         balanceSlider.setVisible(true);
-        for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
-            s->setVisible(dynOpen);
-        for (auto* l : { &dynThresholdLabel, &dynRangeLabel, &dynRatioLabel, &dynAttackLabel, &dynReleaseLabel })
-            l->setVisible(dynOpen);
-        dynThresholdAutoButton.setVisible(dynOpen);
-        dynAutoThresholdButton.setVisible(dynOpen);
-        dynSidechainLabel.setVisible(showSidechain);
-        dynSidechainSlider.setVisible(showSidechain);
         bandEnabledButton.setBounds(tools.removeFromLeft(36).withHeight(16));
         tools.removeFromLeft(4);
         bandSoloButton.setBounds(tools.removeFromLeft(42).withHeight(16));
-        tools.removeFromLeft(6);
-        dynEnableButton.setBounds(tools.removeFromLeft(36).withHeight(16));
-        dynSectionLabel.setBounds({});
         removeButton.setBounds(tools.removeFromRight(56).withHeight(16));
         tools.removeFromRight(4);
         metricModeButton.setBounds(tools.removeFromRight(48).withHeight(16));
@@ -973,51 +984,14 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         opt.removeFromLeft(4);
         balanceLabel.setBounds(opt.removeFromLeft(22).withTrimmedTop(2));
         balanceSlider.setBounds(opt.removeFromLeft(juce::jmax(50, opt.getWidth())));
-
-        if (dynOpen)
-        {
-            r.removeFromTop(2);
-            auto row = r.removeFromTop(22);
-            const int slot = juce::jmax(64, row.getWidth() / 5);
-            auto place = [&row, slot](juce::Label& l, juce::Slider& s)
-            {
-                auto cell = row.removeFromLeft(slot).reduced(1, 0);
-                l.setBounds(cell.removeFromLeft(34).withTrimmedTop(3));
-                s.setBounds(cell);
-            };
-            {
-                auto cell = row.removeFromLeft(slot + 28).reduced(1, 0);
-                dynThresholdLabel.setBounds(cell.removeFromLeft(34).withTrimmedTop(3));
-                dynThresholdAutoButton.setBounds(cell.removeFromLeft(30).withHeight(16).withTrimmedTop(2));
-                dynAutoThresholdButton.setBounds(cell.removeFromLeft(34).withHeight(16).withTrimmedTop(2));
-                dynThresholdSlider.setBounds(cell);
-            }
-            place(dynRangeLabel, dynRangeSlider);
-            place(dynRatioLabel, dynRatioSlider);
-            place(dynAttackLabel, dynAttackSlider);
-            place(dynReleaseLabel, dynReleaseSlider);
-        }
-
-        if (showSidechain)
-        {
-            r.removeFromTop(2);
-            auto sc = r.removeFromTop(18);
-            dynSidechainLabel.setBounds(sc.removeFromLeft(60).withTrimmedTop(2));
-            dynSidechainSlider.setBounds(sc);
-        }
     }
     else
     {
         bandEnabledButton.setButtonText("Active");
         for (auto* c : std::initializer_list<juce::Component*> {
                 &bandEnabledButton, &bandSoloButton, &removeButton, &metricModeButton,
-                &dynEnableButton, &dynSectionLabel,
                 &slopeLabel, &slopeSlider, &brickwallButton,
-                &stereoLabel, &stereoModeBox, &balanceLabel, &balanceSlider,
-                &dynThresholdLabel, &dynThresholdAutoButton, &dynAutoThresholdButton, &dynThresholdSlider,
-                &dynRangeLabel, &dynRangeSlider, &dynRatioLabel, &dynRatioSlider,
-                &dynAttackLabel, &dynAttackSlider, &dynReleaseLabel, &dynReleaseSlider,
-                &dynSidechainLabel, &dynSidechainSlider })
+                &stereoLabel, &stereoModeBox, &balanceLabel, &balanceSlider })
             c->setBounds({});
     }
 
@@ -1040,9 +1014,144 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
 
     placeKnob(knobsRow.removeFromLeft(sideW), freqValueLabel, freqKnob, freqCaption, freqRangeHint);
     knobsRow.removeFromLeft(6);
-    placeKnob(knobsRow.removeFromLeft(centerW), gainValueLabel, gainKnob, gainCaption, gainRangeHint);
+    auto gainCard = knobsRow.removeFromLeft(centerW);
     knobsRow.removeFromLeft(6);
+    placeKnob(gainCard, gainValueLabel, gainKnob, gainCaption, gainRangeHint);
     placeKnob(knobsRow, qValueLabel, qKnob, qCaption, qRangeHint);
+
+    if (canDyn)
+    {
+        // Cluster Dyn with the Gain dB readout so it reads as a Gain control, not a Gain/Q gutter chip.
+        dynPanelButton.setVisible(true);
+        const int dynW = 32;
+        const int dynBtnH = 13;
+        const int gap = 5;
+        const int valueW = 56;
+        const auto valRow = gainValueLabel.getBounds();
+        auto group = juce::Rectangle<int>(valueW + gap + dynW, valRow.getHeight()).withCentre(valRow.getCentre());
+        group = group.constrainedWithin(gainCard.reduced(6, 0));
+        gainValueLabel.setBounds(group.removeFromLeft(valueW));
+        group.removeFromLeft(gap);
+        dynPanelButton.setBounds(group.removeFromLeft(dynW)
+                                     .withHeight(dynBtnH)
+                                     .withY(valRow.getY() + (valRow.getHeight() - dynBtnH) / 2));
+        dynPanelButton.toFront(false);
+    }
+    else
+    {
+        dynPanelButton.setVisible(false);
+        dynPanelButton.setBounds({});
+    }
+    updateDynPanelButton();
+
+    auto hideDynDetails = [this]
+    {
+        dynEnableButton.setVisible(false);
+        dynSectionLabel.setVisible(false);
+        dynThresholdAutoButton.setVisible(false);
+        dynAutoThresholdButton.setVisible(false);
+        for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
+            s->setVisible(false);
+        for (auto* l : { &dynThresholdLabel, &dynRangeLabel, &dynRatioLabel, &dynAttackLabel, &dynReleaseLabel })
+            l->setVisible(false);
+        dynSidechainLabel.setVisible(false);
+        dynSidechainSlider.setVisible(false);
+        for (auto* c : std::initializer_list<juce::Component*> {
+                &dynEnableButton, &dynSectionLabel,
+                &dynThresholdLabel, &dynThresholdAutoButton, &dynAutoThresholdButton, &dynThresholdSlider,
+                &dynRangeLabel, &dynRangeSlider, &dynRatioLabel, &dynRatioSlider,
+                &dynAttackLabel, &dynAttackSlider, &dynReleaseLabel, &dynReleaseSlider,
+                &dynSidechainLabel, &dynSidechainSlider })
+            c->setBounds({});
+    };
+
+    if (dynOpen)
+    {
+        r.removeFromTop(6);
+        auto dynHead = r.removeFromTop(18);
+        dynSectionLabel.setVisible(true);
+        dynSectionLabel.setText("DYNAMICS", juce::dontSendNotification);
+        dynSectionLabel.setBounds(dynHead.removeFromLeft(72).withTrimmedTop(2));
+        dynHead.removeFromLeft(4);
+        dynEnableButton.setVisible(true);
+        dynEnableButton.setBounds(dynHead.removeFromLeft(44).withHeight(16).withY(dynHead.getY() + 1));
+
+        const bool autoTrack = eqProcessor.apvts.getRawParameterValue(
+            Params::bandParamID(primary, "dynAutoThreshold"))->load() >= 0.5f;
+        for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider })
+        {
+            s->setVisible(showDynSliders);
+            s->setEnabled(showDynSliders);
+        }
+        dynThresholdSlider.setEnabled(showDynSliders && !autoTrack);
+        dynThresholdAutoButton.setVisible(showDynSliders);
+        dynThresholdAutoButton.setEnabled(showDynSliders);
+        dynAutoThresholdButton.setVisible(showDynSliders);
+        dynAutoThresholdButton.setEnabled(showDynSliders);
+        for (auto* l : { &dynThresholdLabel, &dynRangeLabel, &dynRatioLabel, &dynAttackLabel, &dynReleaseLabel })
+            l->setVisible(showDynSliders);
+        dynSidechainLabel.setVisible(showDynSliders);
+        dynSidechainSlider.setVisible(showDynSliders);
+        dynSidechainSlider.setEnabled(showDynSliders);
+        updateDynRangeLabelForBand(primary);
+
+        if (showDynSliders)
+        {
+            const int labelW = 50;
+            const int rowH = 26;
+            const int gutter = 10;
+
+            auto placeLabelSlider = [](juce::Rectangle<int> cell, juce::Label& l, juce::Slider& s, int lw)
+            {
+                l.setBounds(cell.removeFromLeft(lw).withTrimmedTop(6));
+                s.setBounds(cell.reduced(0, 3));
+            };
+
+            r.removeFromTop(6);
+            auto row1 = r.removeFromTop(rowH);
+            {
+                auto thresh = row1.removeFromLeft(juce::jmax(240, row1.getWidth() * 58 / 100));
+                row1.removeFromLeft(gutter);
+                auto comp = row1;
+
+                dynThresholdLabel.setBounds(thresh.removeFromLeft(44).withTrimmedTop(6));
+                thresh.removeFromLeft(3);
+                dynThresholdAutoButton.setBounds(thresh.removeFromLeft(30).withHeight(18).withY(thresh.getY() + 4));
+                thresh.removeFromLeft(4);
+                dynAutoThresholdButton.setBounds(thresh.removeFromLeft(42).withHeight(18).withY(thresh.getY() + 4));
+                thresh.removeFromLeft(6);
+                dynThresholdSlider.setBounds(thresh.reduced(0, 3));
+
+                placeLabelSlider(comp, dynRangeLabel, dynRangeSlider, labelW);
+            }
+
+            r.removeFromTop(6);
+            auto row2 = r.removeFromTop(rowH);
+            const int col = juce::jmax(100, (row2.getWidth() - 2 * gutter) / 3);
+            placeLabelSlider(row2.removeFromLeft(col), dynRatioLabel, dynRatioSlider, labelW);
+            row2.removeFromLeft(gutter);
+            placeLabelSlider(row2.removeFromLeft(col), dynAttackLabel, dynAttackSlider, labelW);
+            row2.removeFromLeft(gutter);
+            placeLabelSlider(row2, dynReleaseLabel, dynReleaseSlider, labelW);
+
+            r.removeFromTop(6);
+            auto sc = r.removeFromTop(rowH);
+            placeLabelSlider(sc, dynSidechainLabel, dynSidechainSlider, 62);
+        }
+        else
+        {
+            for (auto* c : std::initializer_list<juce::Component*> {
+                    &dynThresholdLabel, &dynThresholdAutoButton, &dynAutoThresholdButton, &dynThresholdSlider,
+                    &dynRangeLabel, &dynRangeSlider, &dynRatioLabel, &dynRatioSlider,
+                    &dynAttackLabel, &dynAttackSlider, &dynReleaseLabel, &dynReleaseSlider,
+                    &dynSidechainLabel, &dynSidechainSlider })
+                c->setBounds({});
+        }
+    }
+    else
+    {
+        hideDynDetails();
+    }
 
     inspectorTitle.setBounds({});
     bandOptionsLabel.setBounds({});
@@ -1060,8 +1169,6 @@ void PlaymakersEQAudioProcessorEditor::applyFloatingExtrasVisibility(bool extras
     bandSoloButton.setVisible(show);
     removeButton.setVisible(show);
     metricModeButton.setVisible(show);
-    dynEnableButton.setVisible(show);
-    dynSectionLabel.setVisible(false);
     bandOptionsLabel.setVisible(false);
 
     if (!show)
@@ -1073,21 +1180,30 @@ void PlaymakersEQAudioProcessorEditor::applyFloatingExtrasVisibility(bool extras
         stereoModeBox.setVisible(false);
         balanceLabel.setVisible(false);
         balanceSlider.setVisible(false);
-        dynThresholdAutoButton.setVisible(false);
-        dynAutoThresholdButton.setVisible(false);
-        dynThresholdSlider.setVisible(false);
-        dynRangeSlider.setVisible(false);
-        dynRatioSlider.setVisible(false);
-        dynAttackSlider.setVisible(false);
-        dynReleaseSlider.setVisible(false);
-        dynThresholdLabel.setVisible(false);
-        dynRangeLabel.setVisible(false);
-        dynRatioLabel.setVisible(false);
-        dynAttackLabel.setVisible(false);
-        dynReleaseLabel.setVisible(false);
-        dynSidechainLabel.setVisible(false);
-        dynSidechainSlider.setVisible(false);
     }
+}
+
+void PlaymakersEQAudioProcessorEditor::updateDynPanelButton()
+{
+    const int band = analyzer.getPrimarySelectedBand();
+    bool canDyn = false;
+    bool dynOn = false;
+    if (band >= 0)
+    {
+        const auto type = static_cast<Params::FilterType>(
+            (int) eqProcessor.apvts.getRawParameterValue(Params::bandParamID(band, "type"))->load());
+        canDyn = Params::typeSupportsDynamics(type);
+        dynOn = canDyn
+            && eqProcessor.apvts.getRawParameterValue(Params::bandParamID(band, "dynEnabled"))->load() >= 0.5f;
+    }
+
+    dynPanelButton.setEnabled(canDyn);
+    dynPanelButton.setTooltip(canDyn
+        ? "Show or hide Dynamics controls. Does not turn Dynamics on or off."
+        : "Dynamics is not available for this filter type");
+    dynPanelButton.getProperties().set("pmAccent", dynOn);
+    dynPanelButton.setToggleState(dynPanelOpen, juce::dontSendNotification);
+    dynPanelButton.repaint();
 }
 
 void PlaymakersEQAudioProcessorEditor::updateMetricModeVisibility(bool hasSelection)
@@ -1133,6 +1249,7 @@ void PlaymakersEQAudioProcessorEditor::updateMetricModeVisibility(bool hasSelect
     else
     {
         moreButton.setVisible(false);
+        dynPanelButton.setVisible(false);
         bandEnabledButton.setButtonText("Active");
         for (auto* kn : { &freqKnob, &gainKnob, &qKnob })
             kn->getProperties().set("pmLargeKnob", false);
@@ -1329,6 +1446,7 @@ void PlaymakersEQAudioProcessorEditor::applyBandAccentToInspector(int bandIndex)
     bandEnabledButton.getProperties().set("pmAccentColour", colourStr);
     brickwallButton.getProperties().set("pmAccentColour", colourStr);
     dynEnableButton.getProperties().set("pmAccentColour", dynColourStr);
+    dynPanelButton.getProperties().set("pmAccentColour", dynColourStr);
 
     for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider, &dynSidechainSlider, &slopeSlider, &balanceSlider })
         s->getProperties().set("pmAccentColour", dynColourStr);
@@ -1336,12 +1454,14 @@ void PlaymakersEQAudioProcessorEditor::applyBandAccentToInspector(int bandIndex)
         kn->getProperties().set("pmAccentColour", colourStr);
 
     updateGainDynIndicator();
+    updateDynPanelButton();
 
     removeButton.repaint();
     bandEnabledButton.repaint();
     bandSoloButton.repaint();
     brickwallButton.repaint();
     dynEnableButton.repaint();
+    dynPanelButton.repaint();
     typeBox.repaint();
     stereoModeBox.repaint();
     for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider,

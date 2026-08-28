@@ -88,7 +88,7 @@ public:
 
         g.setColour(textCol);
         g.drawFittedText(button.getButtonText(),
-                         button.getLocalBounds().reduced(8, 0),
+                         button.getLocalBounds().reduced((bool) button.getProperties().getWithDefault("pmCompact", false) ? 3 : 8, 0),
                          juce::Justification::centred, 1, 0.9f);
     }
 
