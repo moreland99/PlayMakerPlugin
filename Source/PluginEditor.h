@@ -107,8 +107,10 @@ private:
     juce::TextButton metricModeButton { "Knobs" };
     juce::TextButton moreButton { "More" };
     juce::TextButton dynPanelButton { "Dyn" };
+    juce::TextButton bandListButton { "Bands" };
     bool hubExtrasOpen = false;
     bool dynPanelOpen = false;
+    bool bandListOpen = false;
     juce::Slider freqKnob;
     juce::Slider gainKnob;
     juce::Slider qKnob;

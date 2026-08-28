@@ -140,7 +140,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     abButton.getProperties().set("pmAccent", true);
     removeButton.getProperties().set("pmAccent", true);
     dynThresholdAutoButton.getProperties().set("pmChrome", true);
-    for (auto* b : { &undoButton, &redoButton, &abButton, &copyButton, &expandButton })
+    for (auto* b : { &undoButton, &redoButton, &bandListButton, &abButton, &copyButton, &expandButton })
         b->getProperties().set("pmChrome", true);
     for (auto* b : { &specPreButton, &specPostButton, &specFreezeButton })
         b->getProperties().set("pmChrome", true);
@@ -204,6 +204,18 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
         hubExtrasOpen = moreButton.getToggleState();
         eqProcessor.apvts.state.setProperty("hubExtrasOpen", hubExtrasOpen, nullptr);
         moreButton.setButtonText(hubExtrasOpen ? "Less" : "More");
+        resized();
+        repaint();
+    };
+
+    bandListButton.setClickingTogglesState(true);
+    bandListButton.setTooltip("Show or hide the band list.");
+    bandListButton.setToggleState(bandListOpen, juce::dontSendNotification);
+    bandListButton.getProperties().set("pmAccent", bandListOpen);
+    bandListButton.onClick = [this]
+    {
+        bandListOpen = bandListButton.getToggleState();
+        bandListButton.getProperties().set("pmAccent", bandListOpen);
         resized();
         repaint();
     };
@@ -332,7 +344,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
 
     displayRangeLabel.setVisible(true);
     displayRangeBox.setVisible(true);
-    for (auto* b : { &undoButton, &redoButton, &abButton, &copyButton, &expandButton, &removeButton })
+    for (auto* b : { &undoButton, &redoButton, &bandListButton, &abButton, &copyButton, &expandButton, &removeButton })
         addAndMakeVisible(*b);
     for (auto* b : { &specPreButton, &specPostButton, &specFreezeButton, &pluginBypassButton })
         addAndMakeVisible(*b);
@@ -345,6 +357,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
 
     addAndMakeVisible(analyzer);
     addAndMakeVisible(bandList);
+    bandList.setVisible(false);
     addChildComponent(floatingBandPanel);
     floatingBandPanel.accentColour = [this]
     {
@@ -1731,6 +1744,7 @@ void PlaymakersEQAudioProcessorEditor::resized()
 
     placeHeaderBtn(undoButton, 60);
     placeHeaderBtn(redoButton, 60);
+    placeHeaderBtn(bandListButton, 62);
 
     auto placeRight = [&header](juce::TextButton& b, int w)
     {
@@ -1769,9 +1783,19 @@ void PlaymakersEQAudioProcessorEditor::resized()
     inspectorBounds = bounds.removeFromBottom(inspectorH);
 
     auto graphArea = bounds.reduced(4, 4);
-    bandListBounds = graphArea.removeFromLeft(172);
-    graphArea.removeFromLeft(6);
-    bandList.setBounds(bandListBounds);
+    if (bandListOpen)
+    {
+        bandListBounds = graphArea.removeFromLeft(172);
+        graphArea.removeFromLeft(6);
+        bandList.setBounds(bandListBounds);
+        bandList.setVisible(true);
+    }
+    else
+    {
+        bandListBounds = {};
+        bandList.setVisible(false);
+        bandList.setBounds({});
+    }
     analyzerSpecBarBounds = graphArea.removeFromTop(26);
     analyzer.setBounds(graphArea);
 
