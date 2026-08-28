@@ -25,8 +25,16 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
         repaint();
     };
 
-    undoButton.onClick = [this] { eqProcessor.undoManager.undo(); };
-    redoButton.onClick = [this] { eqProcessor.undoManager.redo(); };
+    undoButton.onClick = [this]
+    {
+        eqProcessor.undoManager.undo();
+        refreshInspector();
+    };
+    redoButton.onClick = [this]
+    {
+        eqProcessor.undoManager.redo();
+        refreshInspector();
+    };
     abButton.onClick = [this]
     {
         eqProcessor.toggleAB();
@@ -1632,12 +1640,14 @@ bool PlaymakersEQAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     if (key == juce::KeyPress('z', juce::ModifierKeys(noShift), 0))
     {
         eqProcessor.undoManager.undo();
+        refreshInspector();
         return true;
     }
     if (key == juce::KeyPress('z', juce::ModifierKeys(withShift), 0)
         || key == juce::KeyPress('y', juce::ModifierKeys(noShift), 0))
     {
         eqProcessor.undoManager.redo();
+        refreshInspector();
         return true;
     }
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
