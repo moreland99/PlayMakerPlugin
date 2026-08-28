@@ -428,35 +428,46 @@ void SpectrumAnalyzerComponent::drawSpectrumTrace(juce::Graphics& g, juce::Recta
     for (int x = 0; x < columns; ++x)
     {
         const float freqL = xToFreq((float) x, width);
+        const float freqC = xToFreq((float) x + 0.5f, width);
         const float freqR = xToFreq((float) juce::jmin(columns, x + 1), width);
         const int binL = juce::jlimit(1, lastBin, (int) (freqL * binScale));
         const int binR = juce::jlimit(1, lastBin, (int) (freqR * binScale));
 
-        float peak = magAtFreq(freqL);
+        const float center = magAtFreq(freqC);
+        float peak = center;
         if (binR > binL)
         {
             for (int b = binL; b <= binR; ++b)
                 peak = juce::jmax(peak, magnitudesDb[(size_t) b]);
         }
-        else
-        {
-            peak = juce::jmax(peak, magAtFreq(freqR));
-        }
 
-        spectrumDrawY[(size_t) x] = dbToY(peak, height, specMinDb, specMaxDb);
+        constexpr float peakBlend = 0.22f;
+        spectrumDrawY[(size_t) x] = dbToY(center + peakBlend * (peak - center),
+                                          height, specMinDb, specMaxDb);
     }
 
-    spectrumDrawScratch = spectrumDrawY;
-    for (int pass = 0; pass < 3; ++pass)
+    // 5-tap binomial × 7 (~2.6 px). Previous 3-tap × 3 was ~1 px and left a skyline.
+    if (columns >= 5)
     {
-        auto& src = (pass & 1) ? spectrumDrawY : spectrumDrawScratch;
-        auto& dst = (pass & 1) ? spectrumDrawScratch : spectrumDrawY;
-        dst[0] = src[0];
-        dst[(size_t) columns - 1] = src[(size_t) columns - 1];
-        for (int x = 1; x < columns - 1; ++x)
-            dst[(size_t) x] = 0.20f * src[(size_t) (x - 1)]
-                            + 0.60f * src[(size_t) x]
-                            + 0.20f * src[(size_t) (x + 1)];
+        spectrumDrawScratch = spectrumDrawY;
+        constexpr int smoothPasses = 7;
+        for (int pass = 0; pass < smoothPasses; ++pass)
+        {
+            auto& src = (pass & 1) ? spectrumDrawY : spectrumDrawScratch;
+            auto& dst = (pass & 1) ? spectrumDrawScratch : spectrumDrawY;
+            dst[0] = src[0];
+            dst[1] = 0.20f * src[0] + 0.60f * src[1] + 0.20f * src[2];
+            dst[(size_t) columns - 1] = src[(size_t) columns - 1];
+            dst[(size_t) columns - 2] = 0.20f * src[(size_t) columns - 3]
+                                      + 0.60f * src[(size_t) columns - 2]
+                                      + 0.20f * src[(size_t) columns - 1];
+            for (int x = 2; x < columns - 2; ++x)
+                dst[(size_t) x] = 0.0625f * src[(size_t) (x - 2)]
+                                + 0.2500f * src[(size_t) (x - 1)]
+                                + 0.3750f * src[(size_t) x]
+                                + 0.2500f * src[(size_t) (x + 1)]
+                                + 0.0625f * src[(size_t) (x + 2)];
+        }
     }
 
     juce::Path path;
