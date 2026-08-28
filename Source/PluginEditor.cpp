@@ -166,6 +166,12 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     // Slightly shorter full-range throw than Gain/Q so one vertical drag covers more of 20 Hz–20 kHz.
     freqKnob.setMouseDragSensitivity(220);
     gainKnob.getProperties().set("pmBipolarArc", true);
+    gainKnob.getProperties().set("pmShowDynArc", false);
+    gainKnob.onValueChange = [this]
+    {
+        if (!updatingInspector)
+            updateGainDynIndicator();
+    };
     freqKnob.setTooltip("Frequency — drag, Shift-drag for fine, or click the value to type");
     gainKnob.setTooltip("Gain — drag, Shift-drag for fine, or click the value to type");
     qKnob.setTooltip("Q — drag, Shift-drag for fine, or scroll the handle on the graph");
@@ -261,7 +267,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     pluginBypassButton.setTooltip("Pass audio through without EQ (output gain still applies)");
     pluginBypassButton.onClick = [this] { repaint(); };
 
-    buildTag.setText("UI Aug 26b", juce::dontSendNotification);
+    buildTag.setText("UI Aug 27c", juce::dontSendNotification);
     buildTag.setInterceptsMouseClicks(false, false);
     buildTag.setTooltip("Dev build marker — remove plugin instance and re-insert if UI looks stale");
 #if JUCE_DEBUG
@@ -772,6 +778,8 @@ void PlaymakersEQAudioProcessorEditor::timerCallback()
         else if (dynThresholdSlider.isVisible())
             updateDynRangeLabelForBand(primary);
     }
+
+    updateGainDynIndicator();
 }
 
 bool PlaymakersEQAudioProcessorEditor::isEditingMetrics() const
@@ -1327,6 +1335,8 @@ void PlaymakersEQAudioProcessorEditor::applyBandAccentToInspector(int bandIndex)
     for (auto* kn : { &freqKnob, &gainKnob, &qKnob })
         kn->getProperties().set("pmAccentColour", colourStr);
 
+    updateGainDynIndicator();
+
     removeButton.repaint();
     bandEnabledButton.repaint();
     bandSoloButton.repaint();
@@ -1337,6 +1347,42 @@ void PlaymakersEQAudioProcessorEditor::applyBandAccentToInspector(int bandIndex)
     for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider,
                      &dynSidechainSlider, &slopeSlider, &balanceSlider, &freqKnob, &gainKnob, &qKnob })
         s->repaint();
+}
+
+void PlaymakersEQAudioProcessorEditor::updateGainDynIndicator()
+{
+    const int band = analyzer.getPrimarySelectedBand();
+    bool show = false;
+    double rangeDb = 0.0;
+    double offsetDb = 0.0;
+    auto dynColourStr = themeManager.current().signalOrange.toString();
+
+    if (band >= 0)
+    {
+        const auto type = static_cast<Params::FilterType>(
+            (int) eqProcessor.apvts.getRawParameterValue(Params::bandParamID(band, "type"))->load());
+        show = Params::typeSupportsDynamics(type)
+            && eqProcessor.apvts.getRawParameterValue(Params::bandParamID(band, "dynEnabled"))->load() >= 0.5f;
+        if (show)
+        {
+            rangeDb = (double) eqProcessor.apvts.getRawParameterValue(Params::bandParamID(band, "dynRange"))->load();
+            offsetDb = (double) eqProcessor.dynDisplayOffsetDb[(size_t) band].load(std::memory_order_relaxed);
+            const auto bandCol = Theme::bandColour(band, themeManager.current().isLight());
+            dynColourStr = Theme::dynamicsColour(bandCol, themeManager.current().isLight()).toString();
+        }
+    }
+
+    auto& props = gainKnob.getProperties();
+    props.set("pmShowDynArc", show);
+    props.set("pmDynRangeDb", rangeDb);
+    props.set("pmDynOffsetDb", offsetDb);
+    props.set("pmDynArcColour", dynColourStr);
+
+    freqKnob.getProperties().remove("pmShowDynArc");
+    qKnob.getProperties().remove("pmShowDynArc");
+
+    if (gainKnob.isVisible())
+        gainKnob.repaint();
 }
 
 bool PlaymakersEQAudioProcessorEditor::keyPressed(const juce::KeyPress& key)

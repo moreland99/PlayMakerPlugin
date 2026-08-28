@@ -43,6 +43,7 @@ private:
     void applyThemeToButtons();
     void applyThemeToInspector();
     void applyBandAccentToInspector(int bandIndex);
+    void updateGainDynIndicator();
     void applyAnalyzerOptions();
     void loadAnalyzerOptionsFromState();
     void refreshInspector();

@@ -212,17 +212,24 @@ public:
 
         const bool large = (bool) slider.getProperties().getWithDefault("pmLargeKnob", false);
         const bool bipolar = (bool) slider.getProperties().getWithDefault("pmBipolarArc", false);
-        // Prefer parameter proportion so log/skewed ranges (freq) map correctly.
-        const float prop = juce::jlimit(0.0f, 1.0f, (float) slider.valueToProportionOfLength(slider.getValue()));
+        const bool showDynArc = (bool) slider.getProperties().getWithDefault("pmShowDynArc", false);
+        // Same 0–1 position JUCE used for this paint. Path arcs and the needle must share it.
+        const float prop = juce::jlimit(0.0f, 1.0f, sliderPosProportional);
         const float startAng = rotaryStartAngle;
         const float endAng = rotaryEndAngle;
-        const float angle = juce::jmap(prop, 0.0f, 1.0f, startAng, endAng);
+        const float needleAngle = juce::jmap(prop, 0.0f, 1.0f, startAng, endAng);
 
         const auto bounds = juce::Rectangle<float>((float) x, (float) y, (float) width, (float) height);
         const float size = juce::jmin(bounds.getWidth(), bounds.getHeight());
         const float cx = bounds.getCentreX();
         const float cy = bounds.getCentreY();
         const float enabledA = slider.isEnabled() ? 1.0f : 0.42f;
+        // JUCE rotary/path convention: 0 rad = 12 o'clock, increasing clockwise
+        // (sin, -cos). Math cos/sin is 90° off (3 o'clock) and must not be used here.
+        auto pointOnRing = [cx, cy] (float ang, float radius) -> juce::Point<float>
+        {
+            return { cx + radius * std::sin(ang), cy - radius * std::cos(ang) };
+        };
 
         // Fill most of the control — solid dial, not a thin “gadget” ring.
         const float outerR = size * (large ? 0.49f : 0.46f);
@@ -245,18 +252,21 @@ public:
                                                       juce::PathStrokeType::rounded));
         }
 
-        // Value arc (bipolar from noon for gain).
+        // Value arc: Freq/Q fill from start; Gain fills from 0 dB. Skip Gain's bipolar
+        // fill while Dynamics is on — that arc is anchored at noon, not the needle, and
+        // reads as a drifting "range" when the user moves Gain.
+        if (!showDynArc)
         {
             juce::Path valueArc;
             if (bipolar)
             {
                 const float midAng = juce::jmap(0.5f, 0.0f, 1.0f, startAng, endAng);
                 valueArc.addCentredArc(cx, cy, arcR, arcR, 0.0f,
-                                       juce::jmin(midAng, angle), juce::jmax(midAng, angle), true);
+                                       juce::jmin(midAng, needleAngle), juce::jmax(midAng, needleAngle), true);
             }
             else
             {
-                valueArc.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAng, angle, true);
+                valueArc.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAng, needleAngle, true);
             }
             g.setColour(accent.withAlpha(0.95f * enabledA));
             g.strokePath(valueArc, juce::PathStrokeType(arcW + 0.4f, juce::PathStrokeType::curved,
@@ -293,26 +303,69 @@ public:
         g.setColour(theme.softWhite.withAlpha((theme.isLight() ? 0.35f : 0.14f) * enabledA));
         g.drawEllipse(cx - faceR + 1.0f, cy - faceR + 1.0f, faceR * 2.0f - 2.0f, faceR * 2.0f - 2.0f, 1.0f);
 
-        // Needle.
+        // Needle — same angle and (sin, -cos) convention as Path::addCentredArc.
         const float needleInner = faceR * 0.12f;
         const float needleOuter = faceR * 0.88f;
-        const float nx0 = cx + std::cos(angle) * needleInner;
-        const float ny0 = cy + std::sin(angle) * needleInner;
-        const float nx1 = cx + std::cos(angle) * needleOuter;
-        const float ny1 = cy + std::sin(angle) * needleOuter;
+        const auto n0 = pointOnRing(needleAngle, needleInner);
+        const auto n1 = pointOnRing(needleAngle, needleOuter);
         g.setColour((theme.isLight() ? theme.ink : theme.softWhite).withAlpha(0.95f * enabledA));
-        g.drawLine(nx0, ny0, nx1, ny1, large ? 2.4f : 2.0f);
+        g.drawLine(n0.x, n0.y, n1.x, n1.y, large ? 2.4f : 2.0f);
 
-        // Tip dot in band accent.
         const float tip = large ? 3.2f : 2.6f;
         g.setColour(accent.withAlpha(enabledA));
-        g.fillEllipse(nx1 - tip, ny1 - tip, tip * 2.0f, tip * 2.0f);
+        g.fillEllipse(n1.x - tip, n1.y - tip, tip * 2.0f, tip * 2.0f);
 
-        // Center cap.
+        // Dyn range/live: start at the needle's normalized position (same `prop` / angle).
+        // Endpoints are that prop plus dB/span — not a second convert of (gain+delta).
+        if (showDynArc)
+        {
+            juce::Colour dynAccent = accent;
+            if (auto* c = slider.getProperties().getVarPointer("pmDynArcColour"))
+                if (c->isString())
+                    dynAccent = juce::Colour::fromString(c->toString());
+
+            const double dynRangeDb = (double) slider.getProperties().getWithDefault("pmDynRangeDb", 0.0);
+            const double dynOffsetDb = (double) slider.getProperties().getWithDefault("pmDynOffsetDb", 0.0);
+            const double spanDb = slider.getMaximum() - slider.getMinimum();
+            const float dynR = needleOuter + tip + (large ? 3.0f : 2.0f);
+
+            auto strokeDeltaFromNeedle = [&] (double deltaDb, juce::Colour colour, float strokeW)
+            {
+                if (spanDb <= 1.0e-6 || std::abs(deltaDb) < 0.05)
+                    return;
+                const float endProp = juce::jlimit(0.0f, 1.0f, prop + (float) (deltaDb / spanDb));
+                const float endAngle = juce::jmap(endProp, 0.0f, 1.0f, startAng, endAng);
+                if (std::abs(endAngle - needleAngle) < 0.008f)
+                    return;
+
+                juce::Path p;
+                const int steps = juce::jmax(4, (int) std::ceil(std::abs(endAngle - needleAngle) / 0.06f));
+                for (int i = 0; i <= steps; ++i)
+                {
+                    const float t = (float) i / (float) steps;
+                    const float a = needleAngle + (endAngle - needleAngle) * t;
+                    const auto pt = pointOnRing(a, dynR);
+                    if (i == 0)
+                        p.startNewSubPath(pt);
+                    else
+                        p.lineTo(pt);
+                }
+                g.setColour(colour);
+                g.strokePath(p, juce::PathStrokeType(strokeW, juce::PathStrokeType::curved,
+                                                     juce::PathStrokeType::butt));
+            };
+
+            strokeDeltaFromNeedle(dynRangeDb,
+                                  dynAccent.withAlpha((theme.isLight() ? 0.35f : 0.40f) * enabledA),
+                                  large ? 5.0f : 3.6f);
+            strokeDeltaFromNeedle(dynOffsetDb,
+                                  dynAccent.withAlpha(0.95f * enabledA),
+                                  large ? 3.2f : 2.4f);
+        }
+
         const float cap = faceR * 0.16f;
         g.setColour((theme.isLight() ? theme.ink.withAlpha(0.18f) : juce::Colour(0xff1e1e22)).withMultipliedAlpha(enabledA));
         g.fillEllipse(cx - cap, cy - cap, cap * 2.0f, cap * 2.0f);
-        juce::ignoreUnused(sliderPosProportional);
     }
 
     void drawLinearSlider(juce::Graphics& g, int x, int y, int width, int height,
