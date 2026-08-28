@@ -53,6 +53,7 @@ private:
     void applyDynEnabledToSelection(bool enabled);
     void applySoloToSelection(bool soloEnabled);
     void applyAutoThresholdCaptureToSelection();
+    void applyDynSidechainBlendToSelection(bool external);
     void updateDynRangeLabelForBand(int bandIndex);
     void commitMetricFromLabel(juce::Label& label, const char* paramSuffix);
     bool isEditingMetrics() const;
@@ -63,6 +64,7 @@ private:
     void layoutFloatingBandPanel(juce::Rectangle<int> graphBounds);
     void applyFloatingExtrasVisibility(bool extras);
     void updateDynPanelButton();
+    void updateDynSidechainButton();
     static float parseFrequencyText(const juce::String& text);
     static float parseFloatText(const juce::String& text);
 
@@ -161,6 +163,7 @@ private:
 
     juce::Label dynSidechainLabel { {}, "Sidechain" };
     juce::Slider dynSidechainSlider;
+    juce::ToggleButton dynSidechainButton { "Off" };
     juce::Label emptyHint { {},
         "Click a band on the graph or pick one from the list.\n"
         "Double-click empty space to add a band · Scroll or ⌘-drag a handle for Q · Option-click a band to remove" };

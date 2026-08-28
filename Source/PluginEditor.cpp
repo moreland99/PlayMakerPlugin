@@ -220,6 +220,16 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
         repaint();
     };
 
+    dynSidechainButton.setClickingTogglesState(true);
+    dynSidechainButton.setTooltip("Off: detect from this track. On: detect from the Sidechain input.");
+    dynSidechainButton.onClick = [this]
+    {
+        if (updatingInspector)
+            return;
+        applyDynSidechainBlendToSelection(dynSidechainButton.getToggleState());
+        updateDynSidechainButton();
+    };
+
     slopeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     slopeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 44, 20);
     slopeSlider.setEnabled(false);
@@ -352,6 +362,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     addAndMakeVisible(metricModeButton);
     addAndMakeVisible(moreButton);
     floatingBandPanel.addAndMakeVisible(dynPanelButton);
+    floatingBandPanel.addAndMakeVisible(dynSidechainButton);
     addAndMakeVisible(freqKnob);
     addAndMakeVisible(gainKnob);
     addAndMakeVisible(qKnob);
@@ -619,6 +630,20 @@ void PlaymakersEQAudioProcessorEditor::applyDynEnabledToSelection(bool enabled)
     }
 }
 
+void PlaymakersEQAudioProcessorEditor::applyDynSidechainBlendToSelection(bool external)
+{
+    auto bands = analyzer.getSelectedBandIndices();
+    for (auto band : bands)
+    {
+        if (auto* p = eqProcessor.apvts.getParameter(Params::bandParamID(band, "dynSidechainBlend")))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(external ? 1.0f : 0.0f);
+            p->endChangeGesture();
+        }
+    }
+}
+
 void PlaymakersEQAudioProcessorEditor::refreshInspector()
 {
     updatingInspector = true;
@@ -663,6 +688,7 @@ void PlaymakersEQAudioProcessorEditor::refreshInspector()
         dynAutoThresholdButton.setVisible(false);
         dynSidechainLabel.setVisible(false);
         dynSidechainSlider.setVisible(false);
+        dynSidechainButton.setVisible(false);
         dynEnableButton.setVisible(false);
         dynSectionLabel.setVisible(false);
         dynPanelButton.setVisible(false);
@@ -750,6 +776,7 @@ void PlaymakersEQAudioProcessorEditor::refreshInspector()
     }
     updateDynRangeLabelForBand(primary);
     updateDynPanelButton();
+    updateDynSidechainButton();
 
     updatingInspector = false;
     applyBandAccentToInspector(primary);
@@ -877,6 +904,7 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         floatingBandPanel.setVisible(false);
         moreButton.setVisible(false);
         dynPanelButton.setVisible(false);
+        dynSidechainButton.setVisible(false);
         removeButton.setVisible(false);
         bandEnabledButton.setVisible(false);
         bandEnabledButton.setBounds({});
@@ -900,7 +928,7 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     const int knobsH = 118;
     const int headH = 22;
     const int extrasH = extras ? (22 + 18 + 6) : 0;
-    const int dynH = dynOpen ? (8 + 20 + (showDynSliders ? 90 : 0)) : 0;
+    const int dynH = dynOpen ? (8 + 20 + (showDynSliders ? 64 : 0)) : 0;
     if (freqKnob.isMouseButtonDown() || gainKnob.isMouseButtonDown() || qKnob.isMouseButtonDown())
         return;
 
@@ -1074,12 +1102,13 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
             l->setVisible(false);
         dynSidechainLabel.setVisible(false);
         dynSidechainSlider.setVisible(false);
+        dynSidechainButton.setVisible(false);
         for (auto* c : std::initializer_list<juce::Component*> {
                 &dynEnableButton, &dynSectionLabel,
                 &dynThresholdLabel, &dynThresholdAutoButton, &dynAutoThresholdButton, &dynThresholdSlider,
                 &dynRangeLabel, &dynRangeSlider, &dynRatioLabel, &dynRatioSlider,
                 &dynAttackLabel, &dynAttackSlider, &dynReleaseLabel, &dynReleaseSlider,
-                &dynSidechainLabel, &dynSidechainSlider })
+                &dynSidechainLabel, &dynSidechainSlider, &dynSidechainButton })
             c->setBounds({});
     };
 
@@ -1093,6 +1122,25 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         dynHead.removeFromLeft(4);
         dynEnableButton.setVisible(true);
         dynEnableButton.setBounds(dynHead.removeFromLeft(44).withHeight(16).withY(dynHead.getY() + 1));
+
+        dynSidechainSlider.setVisible(false);
+        dynSidechainSlider.setBounds({});
+        dynSidechainButton.setVisible(showDynSliders);
+        dynSidechainButton.setEnabled(showDynSliders);
+        dynSidechainLabel.setVisible(showDynSliders);
+        if (showDynSliders)
+        {
+            auto scBtn = dynHead.removeFromRight(52).withHeight(16).withY(dynHead.getY() + 1);
+            dynSidechainButton.setBounds(scBtn);
+            dynHead.removeFromRight(4);
+            dynSidechainLabel.setBounds(dynHead.removeFromRight(62).withTrimmedTop(2));
+            updateDynSidechainButton();
+        }
+        else
+        {
+            dynSidechainButton.setBounds({});
+            dynSidechainLabel.setBounds({});
+        }
 
         const bool autoTrack = eqProcessor.apvts.getRawParameterValue(
             Params::bandParamID(primary, "dynAutoThreshold"))->load() >= 0.5f;
@@ -1108,9 +1156,6 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         dynAutoThresholdButton.setEnabled(showDynSliders);
         for (auto* l : { &dynThresholdLabel, &dynRangeLabel, &dynRatioLabel, &dynAttackLabel, &dynReleaseLabel })
             l->setVisible(showDynSliders);
-        dynSidechainLabel.setVisible(showDynSliders);
-        dynSidechainSlider.setVisible(showDynSliders);
-        dynSidechainSlider.setEnabled(showDynSliders);
         updateDynRangeLabelForBand(primary);
 
         if (showDynSliders)
@@ -1151,10 +1196,6 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
             placeLabelSlider(row2.removeFromLeft(col), dynAttackLabel, dynAttackSlider, labelW);
             row2.removeFromLeft(gutter);
             placeLabelSlider(row2, dynReleaseLabel, dynReleaseSlider, labelW);
-
-            r.removeFromTop(6);
-            auto sc = r.removeFromTop(rowH);
-            placeLabelSlider(sc, dynSidechainLabel, dynSidechainSlider, 62);
         }
         else
         {
@@ -1162,7 +1203,7 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
                     &dynThresholdLabel, &dynThresholdAutoButton, &dynAutoThresholdButton, &dynThresholdSlider,
                     &dynRangeLabel, &dynRangeSlider, &dynRatioLabel, &dynRatioSlider,
                     &dynAttackLabel, &dynAttackSlider, &dynReleaseLabel, &dynReleaseSlider,
-                    &dynSidechainLabel, &dynSidechainSlider })
+                    &dynSidechainLabel, &dynSidechainSlider, &dynSidechainButton })
                 c->setBounds({});
         }
     }
@@ -1221,6 +1262,22 @@ void PlaymakersEQAudioProcessorEditor::updateDynPanelButton()
     dynPanelButton.getProperties().set("pmAccent", dynOn);
     dynPanelButton.setToggleState(dynPanelOpen, juce::dontSendNotification);
     dynPanelButton.repaint();
+}
+
+void PlaymakersEQAudioProcessorEditor::updateDynSidechainButton()
+{
+    const int band = analyzer.getPrimarySelectedBand();
+    bool external = false;
+    if (band >= 0)
+        external = eqProcessor.apvts.getRawParameterValue(
+            Params::bandParamID(band, "dynSidechainBlend"))->load() >= 0.5f;
+
+    dynSidechainButton.setToggleState(external, juce::dontSendNotification);
+    dynSidechainButton.setButtonText(external ? "On" : "Off");
+    dynSidechainButton.setTooltip(external
+        ? "On: detect from the Sidechain input (external)."
+        : "Off: detect from this track (internal).");
+    dynSidechainButton.repaint();
 }
 
 void PlaymakersEQAudioProcessorEditor::updateMetricModeVisibility(bool hasSelection)
@@ -1466,6 +1523,7 @@ void PlaymakersEQAudioProcessorEditor::applyBandAccentToInspector(int bandIndex)
     brickwallButton.getProperties().set("pmAccentColour", colourStr);
     dynEnableButton.getProperties().set("pmAccentColour", dynColourStr);
     dynPanelButton.getProperties().set("pmAccentColour", dynColourStr);
+    dynSidechainButton.getProperties().set("pmAccentColour", dynColourStr);
 
     for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider, &dynSidechainSlider, &slopeSlider, &balanceSlider })
         s->getProperties().set("pmAccentColour", dynColourStr);
@@ -1481,6 +1539,7 @@ void PlaymakersEQAudioProcessorEditor::applyBandAccentToInspector(int bandIndex)
     brickwallButton.repaint();
     dynEnableButton.repaint();
     dynPanelButton.repaint();
+    dynSidechainButton.repaint();
     typeBox.repaint();
     stereoModeBox.repaint();
     for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider,
