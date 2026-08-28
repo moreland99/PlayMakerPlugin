@@ -1041,9 +1041,10 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         }
         stereoLabel.setBounds(opt.removeFromLeft(38).withTrimmedTop(2));
         stereoModeBox.setBounds(opt.removeFromLeft(86).withHeight(16));
-        opt.removeFromLeft(4);
-        balanceLabel.setBounds(opt.removeFromLeft(22).withTrimmedTop(2));
-        balanceSlider.setBounds(opt.removeFromLeft(juce::jmax(50, opt.getWidth())));
+        opt.removeFromLeft(8);
+        balanceLabel.setBounds(opt.removeFromLeft(36));
+        opt.removeFromLeft(3);
+        balanceSlider.setBounds(opt.removeFromLeft(88).withHeight(16));
     }
     else
     {
