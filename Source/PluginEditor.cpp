@@ -195,7 +195,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     };
 
     moreButton.setClickingTogglesState(true);
-    moreButton.setTooltip("Show In, Solo, stereo, and slope");
+    moreButton.setTooltip("Show Solo, stereo, and slope");
     hubExtrasOpen = (bool) eqProcessor.apvts.state.getProperty("hubExtrasOpen", false);
     moreButton.setToggleState(hubExtrasOpen, juce::dontSendNotification);
     moreButton.setButtonText(hubExtrasOpen ? "Less" : "More");
@@ -634,7 +634,10 @@ void PlaymakersEQAudioProcessorEditor::refreshInspector()
     typeBox.setVisible(hasSelection);
     removeButton.setVisible(hasSelection);
     bandOptionsLabel.setVisible(hasSelection);
-    bandEnabledButton.setVisible(hasSelection);
+    if (!usingMetricKnobs())
+        bandEnabledButton.setVisible(hasSelection);
+    else
+        bandEnabledButton.setVisible(false);
     bandSoloButton.setVisible(hasSelection);
     slopeLabel.setVisible(false);
     slopeSlider.setVisible(false);
@@ -846,7 +849,7 @@ void PlaymakersEQAudioProcessorEditor::reparentBandControlsForMode(bool knobs)
             &freqKnob, &gainKnob, &qKnob,
             &freqRangeHint, &gainRangeHint, &qRangeHint,
             &typeLabel, &typeBox, &removeButton, &metricModeButton, &moreButton,
-            &bandOptionsLabel, &bandEnabledButton, &bandSoloButton,
+            &bandOptionsLabel, &bandSoloButton,
             &slopeLabel, &slopeSlider, &brickwallButton,
             &stereoLabel, &stereoModeBox, &balanceLabel, &balanceSlider,
             &dynSectionLabel, &dynEnableButton,
@@ -855,6 +858,15 @@ void PlaymakersEQAudioProcessorEditor::reparentBandControlsForMode(bool knobs)
             &dynAttackLabel, &dynAttackSlider, &dynReleaseLabel, &dynReleaseSlider,
             &dynSidechainLabel, &dynSidechainSlider })
         attach(*c);
+
+    // Keep the enabled toggle off the floating popup. addAndMakeVisible() would force it
+    // visible as a child of the panel (that was still exposing In beside Solo).
+    addAndMakeVisible(bandEnabledButton);
+    if (knobs)
+    {
+        bandEnabledButton.setVisible(false);
+        bandEnabledButton.setBounds({});
+    }
 }
 
 void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<int> graphBounds)
@@ -866,8 +878,13 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         moreButton.setVisible(false);
         dynPanelButton.setVisible(false);
         removeButton.setVisible(false);
+        bandEnabledButton.setVisible(false);
+        bandEnabledButton.setBounds({});
         return;
     }
+
+    bandEnabledButton.setVisible(false);
+    bandEnabledButton.setBounds({});
 
     const auto type = static_cast<Params::FilterType>(
         (int) eqProcessor.apvts.getRawParameterValue(Params::bandParamID(primary, "type"))->load());
@@ -957,8 +974,8 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     {
         r.removeFromTop(4);
         auto tools = r.removeFromTop(18);
-        bandEnabledButton.setButtonText("In");
-        bandEnabledButton.setVisible(true);
+        bandEnabledButton.setVisible(false);
+        bandEnabledButton.setBounds({});
         bandSoloButton.setVisible(true);
         metricModeButton.setVisible(false);
         slopeLabel.setVisible(showSlope);
@@ -968,8 +985,6 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         stereoModeBox.setVisible(true);
         balanceLabel.setVisible(true);
         balanceSlider.setVisible(true);
-        bandEnabledButton.setBounds(tools.removeFromLeft(36).withHeight(16));
-        tools.removeFromLeft(4);
         bandSoloButton.setBounds(tools.removeFromLeft(42).withHeight(16));
         metricModeButton.setBounds({});
 
@@ -991,9 +1006,8 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     }
     else
     {
-        bandEnabledButton.setButtonText("Active");
         for (auto* c : std::initializer_list<juce::Component*> {
-                &bandEnabledButton, &bandSoloButton, &metricModeButton,
+                &bandSoloButton, &metricModeButton,
                 &slopeLabel, &slopeSlider, &brickwallButton,
                 &stereoLabel, &stereoModeBox, &balanceLabel, &balanceSlider })
             c->setBounds({});
@@ -1169,7 +1183,7 @@ void PlaymakersEQAudioProcessorEditor::applyFloatingExtrasVisibility(bool extras
     moreButton.setVisible(usingMetricKnobs() && analyzer.getPrimarySelectedBand() >= 0);
 
     const bool show = extras;
-    bandEnabledButton.setVisible(show);
+    bandEnabledButton.setVisible(false);
     bandSoloButton.setVisible(show);
     metricModeButton.setVisible(false);
     bandOptionsLabel.setVisible(false);
@@ -1235,6 +1249,8 @@ void PlaymakersEQAudioProcessorEditor::updateMetricModeVisibility(bool hasSelect
         // Band chrome lives in the floating panel; keep slope/stereo/dyn visibility from refreshInspector.
         bandOptionsLabel.setVisible(false);
         inspectorTitle.setVisible(false);
+        bandEnabledButton.setVisible(false);
+        bandEnabledButton.setBounds({});
         if (hasSelection)
             emptyHint.setVisible(false);
     }
