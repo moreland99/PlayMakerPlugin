@@ -137,9 +137,9 @@ private:
     juce::Label displayRangeLabel { {}, "Range" };
     juce::ComboBox displayRangeBox;
 
-    juce::ToggleButton specPreButton { "Pre" };
-    juce::ToggleButton specPostButton { "Post" };
-    juce::ToggleButton specFreezeButton { "Freeze" };
+    juce::TextButton specPreButton { "Pre" };
+    juce::TextButton specPostButton { "Post" };
+    juce::TextButton specFreezeButton { "Freeze" };
     juce::Label specSpanLabel { {}, "Spec" };
     juce::ComboBox specSpanBox;
     juce::Rectangle<int> analyzerSpecBarBounds;

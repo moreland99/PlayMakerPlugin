@@ -143,7 +143,10 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     for (auto* b : { &undoButton, &redoButton, &bandListButton, &abButton, &copyButton, &expandButton })
         b->getProperties().set("pmChrome", true);
     for (auto* b : { &specPreButton, &specPostButton, &specFreezeButton })
+    {
         b->getProperties().set("pmChrome", true);
+        b->setClickingTogglesState(true);
+    }
     pluginBypassButton.getProperties().set("pmChrome", true);
     dynAutoThresholdButton.getProperties().set("pmChrome", true);
 
@@ -275,6 +278,14 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     else displayRangeBox.setSelectedId(3, juce::dontSendNotification);
     analyzer.setDisplayRangeHalfDb(savedRange);
 
+    specPreButton.setTooltip("Spectrum before EQ");
+    specPostButton.setTooltip("Spectrum after EQ and Out");
+    specFreezeButton.setTooltip("Holds the current spectrum display while EQ/audio continue");
+    specSpanLabel.setTooltip("Spectrum vertical range; separate from the EQ curve Range control");
+    specSpanBox.setTooltip("Spectrum vertical range; separate from the EQ curve Range control");
+    outputGainLabel.setTooltip("Output gain");
+    outputGainSlider.setTooltip("Output gain");
+
     specPostButton.setToggleState(true, juce::dontSendNotification);
     specPreButton.setToggleState(false, juce::dontSendNotification);
     specSpanBox.addItem("60 dB", 1);
@@ -346,8 +357,9 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     displayRangeBox.setVisible(true);
     for (auto* b : { &undoButton, &redoButton, &bandListButton, &abButton, &copyButton, &expandButton, &removeButton })
         addAndMakeVisible(*b);
-    for (auto* b : { &specPreButton, &specPostButton, &specFreezeButton, &pluginBypassButton })
+    for (auto* b : { &specPreButton, &specPostButton, &specFreezeButton })
         addAndMakeVisible(*b);
+    addAndMakeVisible(pluginBypassButton);
     addAndMakeVisible(specSpanLabel);
     addAndMakeVisible(specSpanBox);
     addAndMakeVisible(outputGainLabel);
@@ -471,9 +483,15 @@ void PlaymakersEQAudioProcessorEditor::applyAnalyzerOptions()
     state.setProperty("analyzerFrozen", freeze ? 1 : 0, nullptr);
     state.setProperty("analyzerSpanDb", span, nullptr);
 
-    specPreButton.setAlpha(showPre ? 1.0f : 0.55f);
-    specPostButton.setAlpha(showPost ? 1.0f : 0.55f);
-    specFreezeButton.setAlpha(freeze ? 1.0f : 0.75f);
+    specPreButton.setAlpha(1.0f);
+    specPostButton.setAlpha(1.0f);
+    specFreezeButton.setAlpha(1.0f);
+    specPreButton.getProperties().set("pmAccent", showPre);
+    specPostButton.getProperties().set("pmAccent", showPost);
+    specFreezeButton.getProperties().set("pmAccent", freeze);
+    specPreButton.repaint();
+    specPostButton.repaint();
+    specFreezeButton.repaint();
 }
 
 void PlaymakersEQAudioProcessorEditor::clearInspectorBindings()
@@ -1489,7 +1507,9 @@ void PlaymakersEQAudioProcessorEditor::applyThemeToInspector()
     specSpanBox.setColour(juce::ComboBox::backgroundColourId,
                           t.isLight() ? t.softWhite.withAlpha(0.7f) : t.softWhite.withAlpha(0.04f));
     prepCaption(specSpanLabel);
+    specSpanLabel.setMinimumHorizontalScale(1.0f);
     prepCaption(outputGainLabel);
+    outputGainLabel.setMinimumHorizontalScale(1.0f);
 
     for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider, &dynSidechainSlider, &slopeSlider, &outputGainSlider })
     {
@@ -1802,20 +1822,21 @@ void PlaymakersEQAudioProcessorEditor::resized()
 
     auto specBar = analyzerSpecBarBounds.reduced(4, 2);
 
-    auto outArea = specBar.removeFromRight(210);
+    auto outArea = specBar.removeFromRight(226);
     pluginBypassButton.setBounds(outArea.removeFromRight(62).withHeight(22));
     outArea.removeFromRight(6);
     outputGainSlider.setBounds(outArea.removeFromRight(118).withHeight(22));
     outArea.removeFromRight(4);
-    outputGainLabel.setBounds(outArea.removeFromRight(24).withHeight(22));
+    outputGainLabel.setBounds(outArea.removeFromRight(36).withHeight(22));
 
-    specPreButton.setBounds(specBar.removeFromLeft(44).withHeight(22));
-    specBar.removeFromLeft(4);
+    specPreButton.setBounds(specBar.removeFromLeft(48).withHeight(22));
+    specBar.removeFromLeft(6);
     specPostButton.setBounds(specBar.removeFromLeft(48).withHeight(22));
-    specBar.removeFromLeft(8);
-    specFreezeButton.setBounds(specBar.removeFromLeft(58).withHeight(22));
-    specBar.removeFromLeft(12);
-    specSpanLabel.setBounds(specBar.removeFromLeft(32).withHeight(22));
+    specBar.removeFromLeft(6);
+    specFreezeButton.setBounds(specBar.removeFromLeft(64).withHeight(22));
+    specBar.removeFromLeft(10);
+    specSpanLabel.setBounds(specBar.removeFromLeft(36).withHeight(22));
+    specBar.removeFromLeft(3);
     specSpanBox.setBounds(specBar.removeFromLeft(72).withHeight(22));
 
     for (auto& c : metricCardBounds) c = {};
