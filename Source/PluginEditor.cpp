@@ -182,18 +182,20 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
         h->setInterceptsMouseClicks(false, false);
     }
 
+    // Knobs is the only user-facing band editor. Ignore any saved Text-mode UI state.
+    eqProcessor.apvts.state.setProperty("metricKnobMode", true, nullptr);
     metricModeButton.setClickingTogglesState(true);
-    metricModeButton.setTooltip("Toggle Freq / Gain / Q between text fields and knobs");
-    const bool savedKnobs = (bool) eqProcessor.apvts.state.getProperty("metricKnobMode", true);
-    metricModeButton.setToggleState(savedKnobs, juce::dontSendNotification);
-    metricModeButton.setButtonText(savedKnobs ? "Text" : "Knobs");
+    metricModeButton.setTooltip({});
+    metricModeButton.setToggleState(true, juce::dontSendNotification);
+    metricModeButton.setButtonText("Text");
+    metricModeButton.setVisible(false);
     metricModeButton.onClick = [this]
     {
         setMetricKnobMode(metricModeButton.getToggleState());
     };
 
     moreButton.setClickingTogglesState(true);
-    moreButton.setTooltip("Show In, Solo, stereo, slope, and Text mode");
+    moreButton.setTooltip("Show In, Solo, stereo, and slope");
     hubExtrasOpen = (bool) eqProcessor.apvts.state.getProperty("hubExtrasOpen", false);
     moreButton.setToggleState(hubExtrasOpen, juce::dontSendNotification);
     moreButton.setButtonText(hubExtrasOpen ? "Less" : "More");
@@ -389,7 +391,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     addAndMakeVisible(buildTag);
     addAndMakeVisible(emptyHint);
 
-    reparentBandControlsForMode(savedKnobs);
+    reparentBandControlsForMode(true);
 
     applyThemeToButtons();
     applyThemeToInspector();
@@ -627,7 +629,7 @@ void PlaymakersEQAudioProcessorEditor::refreshInspector()
 
     emptyHint.setVisible(!hasSelection);
     inspectorTitle.setVisible(hasSelection);
-    metricModeButton.setVisible(hasSelection);
+    metricModeButton.setVisible(false);
     typeLabel.setVisible(hasSelection);
     typeBox.setVisible(hasSelection);
     removeButton.setVisible(hasSelection);
@@ -863,6 +865,7 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         floatingBandPanel.setVisible(false);
         moreButton.setVisible(false);
         dynPanelButton.setVisible(false);
+        removeButton.setVisible(false);
         return;
     }
 
@@ -943,6 +946,10 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     moreButton.setButtonText(extras ? "Less" : "More");
     moreButton.setToggleState(extras, juce::dontSendNotification);
     moreButton.setBounds(head.removeFromRight(48).withHeight(18));
+    head.removeFromRight(4);
+    removeButton.setVisible(true);
+    removeButton.setBounds(head.removeFromRight(54).withHeight(18));
+    removeButton.toFront(false);
 
     applyFloatingExtrasVisibility(extras);
 
@@ -953,8 +960,7 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         bandEnabledButton.setButtonText("In");
         bandEnabledButton.setVisible(true);
         bandSoloButton.setVisible(true);
-        removeButton.setVisible(true);
-        metricModeButton.setVisible(true);
+        metricModeButton.setVisible(false);
         slopeLabel.setVisible(showSlope);
         slopeSlider.setVisible(showSlope);
         brickwallButton.setVisible(showSlope);
@@ -965,9 +971,7 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         bandEnabledButton.setBounds(tools.removeFromLeft(36).withHeight(16));
         tools.removeFromLeft(4);
         bandSoloButton.setBounds(tools.removeFromLeft(42).withHeight(16));
-        removeButton.setBounds(tools.removeFromRight(56).withHeight(16));
-        tools.removeFromRight(4);
-        metricModeButton.setBounds(tools.removeFromRight(48).withHeight(16));
+        metricModeButton.setBounds({});
 
         r.removeFromTop(2);
         auto opt = r.removeFromTop(16);
@@ -989,7 +993,7 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     {
         bandEnabledButton.setButtonText("Active");
         for (auto* c : std::initializer_list<juce::Component*> {
-                &bandEnabledButton, &bandSoloButton, &removeButton, &metricModeButton,
+                &bandEnabledButton, &bandSoloButton, &metricModeButton,
                 &slopeLabel, &slopeSlider, &brickwallButton,
                 &stereoLabel, &stereoModeBox, &balanceLabel, &balanceSlider })
             c->setBounds({});
@@ -1167,8 +1171,7 @@ void PlaymakersEQAudioProcessorEditor::applyFloatingExtrasVisibility(bool extras
     const bool show = extras;
     bandEnabledButton.setVisible(show);
     bandSoloButton.setVisible(show);
-    removeButton.setVisible(show);
-    metricModeButton.setVisible(show);
+    metricModeButton.setVisible(false);
     bandOptionsLabel.setVisible(false);
 
     if (!show)
@@ -1209,7 +1212,7 @@ void PlaymakersEQAudioProcessorEditor::updateDynPanelButton()
 void PlaymakersEQAudioProcessorEditor::updateMetricModeVisibility(bool hasSelection)
 {
     const bool knobs = usingMetricKnobs();
-    metricModeButton.setVisible(hasSelection);
+    metricModeButton.setVisible(false);
     metricModeButton.setButtonText(knobs ? "Text" : "Knobs");
 
     freqCaption.setVisible(hasSelection);
