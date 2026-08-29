@@ -107,6 +107,7 @@ private:
     juce::TextButton metricModeButton { "Knobs" };
     juce::TextButton moreButton { "More" };
     juce::TextButton dynPanelButton { "Dyn" };
+    juce::TextButton dynDetailsButton { "▾" };
     juce::TextButton bandListButton { "Bands" };
     bool hubExtrasOpen = false;
     bool dynPanelOpen = false;

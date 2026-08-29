@@ -241,11 +241,35 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     dynPanelButton.setClickingTogglesState(true);
     dynPanelButton.setButtonText("Dyn");
     dynPanelButton.getProperties().set("pmCompact", true);
-    dynPanelButton.setTooltip("Show or hide Dynamics controls. Does not turn Dynamics on or off.");
-    dynPanelButton.setToggleState(dynPanelOpen, juce::dontSendNotification);
+    dynPanelButton.setTooltip("Enable or disable Dynamics for the selected band(s).");
     dynPanelButton.onClick = [this]
     {
-        dynPanelOpen = dynPanelButton.getToggleState();
+        if (updatingInspector)
+            return;
+        const int band = analyzer.getPrimarySelectedBand();
+        if (band < 0)
+            return;
+        const auto type = static_cast<Params::FilterType>(
+            (int) eqProcessor.apvts.getRawParameterValue(Params::bandParamID(band, "type"))->load());
+        if (!Params::typeSupportsDynamics(type))
+            return;
+        const bool currentlyOn = eqProcessor.apvts.getRawParameterValue(
+            Params::bandParamID(band, "dynEnabled"))->load() >= 0.5f;
+        const bool enabled = !currentlyOn;
+        updatingInspector = true;
+        applyDynEnabledToSelection(enabled);
+        dynPanelOpen = enabled;
+        updatingInspector = false;
+        refreshInspector();
+    };
+
+    dynDetailsButton.setClickingTogglesState(true);
+    dynDetailsButton.setButtonText("▾");
+    dynDetailsButton.getProperties().set("pmCompact", true);
+    dynDetailsButton.setTooltip("Show or hide Dynamics details. Does not turn Dynamics on or off.");
+    dynDetailsButton.onClick = [this]
+    {
+        dynPanelOpen = dynDetailsButton.getToggleState();
         resized();
         repaint();
     };
@@ -402,6 +426,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     addAndMakeVisible(metricModeButton);
     addAndMakeVisible(moreButton);
     floatingBandPanel.addAndMakeVisible(dynPanelButton);
+    floatingBandPanel.addAndMakeVisible(dynDetailsButton);
     floatingBandPanel.addAndMakeVisible(dynSidechainButton);
     addAndMakeVisible(freqKnob);
     addAndMakeVisible(gainKnob);
@@ -738,6 +763,7 @@ void PlaymakersEQAudioProcessorEditor::refreshInspector()
         dynEnableButton.setVisible(false);
         dynSectionLabel.setVisible(false);
         dynPanelButton.setVisible(false);
+        dynDetailsButton.setVisible(false);
         updateMetricModeVisibility(false);
         bandOptionsBounds = {};
         dynSectionBounds = {};
@@ -950,6 +976,7 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         floatingBandPanel.setVisible(false);
         moreButton.setVisible(false);
         dynPanelButton.setVisible(false);
+        dynDetailsButton.setVisible(false);
         dynSidechainButton.setVisible(false);
         removeButton.setVisible(false);
         bandEnabledButton.setVisible(false);
@@ -1127,24 +1154,33 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     {
         // Cluster Dyn with the Gain dB readout so it reads as a Gain control, not a Gain/Q gutter chip.
         dynPanelButton.setVisible(true);
+        dynDetailsButton.setVisible(true);
         const int dynW = 32;
+        const int chevW = 12;
         const int dynBtnH = 13;
         const int gap = 4;
         const int valueW = 52;
         const auto valRow = gainValueLabel.getBounds();
-        auto group = juce::Rectangle<int>(valueW + gap + dynW, valRow.getHeight()).withCentre(valRow.getCentre());
+        auto group = juce::Rectangle<int>(valueW + gap + dynW + 4 + chevW, valRow.getHeight()).withCentre(valRow.getCentre());
         group = group.constrainedWithin(gainCard.reduced(6, 0));
         gainValueLabel.setBounds(group.removeFromLeft(valueW));
         group.removeFromLeft(gap);
         dynPanelButton.setBounds(group.removeFromLeft(dynW)
                                      .withHeight(dynBtnH)
                                      .withY(valRow.getY() + (valRow.getHeight() - dynBtnH) / 2));
+        group.removeFromLeft(4);
+        dynDetailsButton.setBounds(group.removeFromLeft(chevW)
+                                       .withHeight(dynBtnH)
+                                       .withY(valRow.getY() + (valRow.getHeight() - dynBtnH) / 2));
         dynPanelButton.toFront(false);
+        dynDetailsButton.toFront(false);
     }
     else
     {
         dynPanelButton.setVisible(false);
         dynPanelButton.setBounds({});
+        dynDetailsButton.setVisible(false);
+        dynDetailsButton.setBounds({});
     }
     updateDynPanelButton();
 
@@ -1177,9 +1213,8 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         dynSectionLabel.setVisible(true);
         dynSectionLabel.setText("DYNAMICS", juce::dontSendNotification);
         dynSectionLabel.setBounds(dynHead.removeFromLeft(72).withTrimmedTop(1));
-        dynHead.removeFromLeft(4);
-        dynEnableButton.setVisible(true);
-        dynEnableButton.setBounds(dynHead.removeFromLeft(44).withHeight(16).withY(dynHead.getY()));
+        dynEnableButton.setVisible(false);
+        dynEnableButton.setBounds({});
 
         dynSidechainSlider.setVisible(false);
         dynSidechainSlider.setBounds({});
@@ -1315,11 +1350,17 @@ void PlaymakersEQAudioProcessorEditor::updateDynPanelButton()
 
     dynPanelButton.setEnabled(canDyn);
     dynPanelButton.setTooltip(canDyn
-        ? "Show or hide Dynamics controls. Does not turn Dynamics on or off."
+        ? "Enable or disable Dynamics for the selected band(s)."
         : "Dynamics is not available for this filter type");
     dynPanelButton.getProperties().set("pmAccent", dynOn);
-    dynPanelButton.setToggleState(dynPanelOpen, juce::dontSendNotification);
+    dynPanelButton.setToggleState(dynOn, juce::dontSendNotification);
     dynPanelButton.repaint();
+
+    dynDetailsButton.setEnabled(canDyn);
+    dynDetailsButton.setToggleState(dynPanelOpen, juce::dontSendNotification);
+    dynDetailsButton.setButtonText(dynPanelOpen ? "▴" : "▾");
+    dynDetailsButton.setTooltip("Show or hide Dynamics details. Does not turn Dynamics on or off.");
+    dynDetailsButton.repaint();
 }
 
 void PlaymakersEQAudioProcessorEditor::updateDynSidechainButton()
@@ -1384,6 +1425,7 @@ void PlaymakersEQAudioProcessorEditor::updateMetricModeVisibility(bool hasSelect
     {
         moreButton.setVisible(false);
         dynPanelButton.setVisible(false);
+        dynDetailsButton.setVisible(false);
         bandEnabledButton.setButtonText("Active");
         for (auto* kn : { &freqKnob, &gainKnob, &qKnob })
             kn->getProperties().set("pmLargeKnob", false);
@@ -1583,6 +1625,7 @@ void PlaymakersEQAudioProcessorEditor::applyBandAccentToInspector(int bandIndex)
     brickwallButton.getProperties().set("pmAccentColour", colourStr);
     dynEnableButton.getProperties().set("pmAccentColour", dynColourStr);
     dynPanelButton.getProperties().set("pmAccentColour", dynColourStr);
+    dynDetailsButton.getProperties().set("pmAccentColour", dynColourStr);
     dynSidechainButton.getProperties().set("pmAccentColour", dynColourStr);
 
     for (auto* s : { &dynThresholdSlider, &dynRangeSlider, &dynRatioSlider, &dynAttackSlider, &dynReleaseSlider, &dynSidechainSlider, &slopeSlider, &balanceSlider })
@@ -1599,6 +1642,7 @@ void PlaymakersEQAudioProcessorEditor::applyBandAccentToInspector(int bandIndex)
     brickwallButton.repaint();
     dynEnableButton.repaint();
     dynPanelButton.repaint();
+    dynDetailsButton.repaint();
     dynSidechainButton.repaint();
     typeBox.repaint();
     stereoModeBox.repaint();
