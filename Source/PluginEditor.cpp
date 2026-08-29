@@ -976,7 +976,7 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     const int knobsH = 96;
     const int headH = 18;
     const int knobsGap = 3;
-    const int extrasH = extras ? (2 + 16 + 2 + 16) : 0;
+    const int extrasH = extras ? (2 + 16 + (showSlope ? (2 + 16) : 0)) : 0;
     const int dynH = dynOpen ? (4 + 16 + (showDynSliders ? (4 + 22 + 4 + 22) : 0)) : 0;
     if (freqKnob.isMouseButtonDown() || gainKnob.isMouseButtonDown() || qKnob.isMouseButtonDown())
         return;
@@ -986,7 +986,7 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     if (plot.getWidth() < 8)
         plot = graphBounds;
 
-    const int targetW = extras ? (showSlope ? 520 : 400) : (dynOpen ? 400 : 360);
+    const int targetW = (extras || dynOpen) ? 400 : 360;
     const int panelW = juce::jmin(targetW, juce::jmax(320, plot.getWidth() - 16));
     const int panelH = padY * 2 + headH + extrasH + knobsGap + knobsH + dynH;
 
@@ -1065,23 +1065,29 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         balanceSlider.setVisible(true);
         bandSoloButton.setBounds(tools.removeFromLeft(42).withHeight(16));
         metricModeButton.setBounds({});
+        tools.removeFromLeft(8);
+        stereoLabel.setBounds(tools.removeFromLeft(38).withTrimmedTop(2));
+        stereoModeBox.setBounds(tools.removeFromLeft(86).withHeight(16));
+        tools.removeFromLeft(8);
+        balanceLabel.setBounds(tools.removeFromLeft(36));
+        tools.removeFromLeft(3);
+        balanceSlider.setBounds(tools.removeFromLeft(88).withHeight(16));
 
-        r.removeFromTop(2);
-        auto opt = r.removeFromTop(16);
         if (showSlope)
         {
+            r.removeFromTop(2);
+            auto opt = r.removeFromTop(16);
             slopeLabel.setBounds(opt.removeFromLeft(36).withTrimmedTop(2));
             slopeSlider.setBounds(opt.removeFromLeft(88));
             opt.removeFromLeft(4);
             brickwallButton.setBounds(opt.removeFromLeft(70).withHeight(16));
-            opt.removeFromLeft(6);
         }
-        stereoLabel.setBounds(opt.removeFromLeft(38).withTrimmedTop(2));
-        stereoModeBox.setBounds(opt.removeFromLeft(86).withHeight(16));
-        opt.removeFromLeft(8);
-        balanceLabel.setBounds(opt.removeFromLeft(36));
-        opt.removeFromLeft(3);
-        balanceSlider.setBounds(opt.removeFromLeft(88).withHeight(16));
+        else
+        {
+            slopeLabel.setBounds({});
+            slopeSlider.setBounds({});
+            brickwallButton.setBounds({});
+        }
     }
     else
     {
