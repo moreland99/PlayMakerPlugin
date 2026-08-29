@@ -971,10 +971,13 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     const bool showSlope = extras && canSlope;
     const bool showDynSliders = dynOpen && dynEnabled;
 
-    const int knobsH = 118;
-    const int headH = 22;
-    const int extrasH = extras ? (22 + 18 + 6) : 0;
-    const int dynH = dynOpen ? (8 + 20 + (showDynSliders ? 64 : 0)) : 0;
+    const int padX = 8;
+    const int padY = 6;
+    const int knobsH = 96;
+    const int headH = 18;
+    const int knobsGap = 3;
+    const int extrasH = extras ? (2 + 16 + 2 + 16) : 0;
+    const int dynH = dynOpen ? (4 + 16 + (showDynSliders ? (4 + 22 + 4 + 22) : 0)) : 0;
     if (freqKnob.isMouseButtonDown() || gainKnob.isMouseButtonDown() || qKnob.isMouseButtonDown())
         return;
 
@@ -983,8 +986,9 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     if (plot.getWidth() < 8)
         plot = graphBounds;
 
-    const int panelW = juce::jmin((extras || dynOpen) ? 540 : 456, juce::jmax(400, plot.getWidth() - 16));
-    const int panelH = 10 + headH + extrasH + knobsH + dynH + 8;
+    const int targetW = extras ? (showSlope ? 520 : 400) : (dynOpen ? 400 : 360);
+    const int panelW = juce::jmin(targetW, juce::jmax(320, plot.getWidth() - 16));
+    const int panelH = padY * 2 + headH + extrasH + knobsGap + knobsH + dynH;
 
     auto handle = analyzer.getPrimaryHandlePosition().toInt() + origin;
     const int margin = 6;
@@ -1027,27 +1031,27 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     for (auto* kn : { &freqKnob, &gainKnob, &qKnob })
         kn->getProperties().set("pmLargeKnob", true);
 
-    auto r = floatingBandPanel.getLocalBounds().reduced(12, 8);
+    auto r = floatingBandPanel.getLocalBounds().reduced(padX, padY);
 
     auto head = r.removeFromTop(headH);
     typeBox.setVisible(true);
-    typeBox.setBounds(head.removeFromLeft(118).withHeight(18));
+    typeBox.setBounds(head.removeFromLeft(110).withHeight(16).withY(head.getY() + 1));
     typeLabel.setBounds({});
     moreButton.setVisible(true);
     moreButton.setButtonText(extras ? "Less" : "More");
     moreButton.setToggleState(extras, juce::dontSendNotification);
-    moreButton.setBounds(head.removeFromRight(48).withHeight(18));
+    moreButton.setBounds(head.removeFromRight(44).withHeight(16).withY(head.getY() + 1));
     head.removeFromRight(4);
     removeButton.setVisible(true);
-    removeButton.setBounds(head.removeFromRight(54).withHeight(18));
+    removeButton.setBounds(head.removeFromRight(50).withHeight(16).withY(head.getY() + 1));
     removeButton.toFront(false);
 
     applyFloatingExtrasVisibility(extras);
 
     if (extras)
     {
-        r.removeFromTop(4);
-        auto tools = r.removeFromTop(18);
+        r.removeFromTop(2);
+        auto tools = r.removeFromTop(16);
         bandEnabledButton.setVisible(false);
         bandEnabledButton.setBounds({});
         bandSoloButton.setVisible(true);
@@ -1088,27 +1092,28 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
             c->setBounds({});
     }
 
-    r.removeFromTop(4);
+    r.removeFromTop(knobsGap);
     auto knobsRow = r.removeFromTop(knobsH);
-    const int sideW = juce::jmax(100, knobsRow.getWidth() * 28 / 100);
-    const int centerW = juce::jmax(128, knobsRow.getWidth() - sideW * 2 - 12);
+    const int knobGutter = 4;
+    const int sideW = juce::jmax(88, knobsRow.getWidth() * 28 / 100);
+    const int centerW = juce::jmax(112, knobsRow.getWidth() - sideW * 2 - knobGutter * 2);
 
     auto placeKnob = [](juce::Rectangle<int> card, juce::Label& value, juce::Slider& knob,
                         juce::Label& caption, juce::Label& hint)
     {
-        auto inner = card.reduced(4, 0);
-        caption.setBounds(inner.removeFromTop(12));
+        auto inner = card.reduced(2, 0);
+        caption.setBounds(inner.removeFromTop(11));
         caption.setJustificationType(juce::Justification::centred);
-        value.setBounds(inner.removeFromBottom(16));
+        value.setBounds(inner.removeFromBottom(14));
         value.setJustificationType(juce::Justification::centred);
         hint.setBounds({});
-        knob.setBounds(inner.reduced(2, 0));
+        knob.setBounds(inner.reduced(1, 0));
     };
 
     placeKnob(knobsRow.removeFromLeft(sideW), freqValueLabel, freqKnob, freqCaption, freqRangeHint);
-    knobsRow.removeFromLeft(6);
+    knobsRow.removeFromLeft(knobGutter);
     auto gainCard = knobsRow.removeFromLeft(centerW);
-    knobsRow.removeFromLeft(6);
+    knobsRow.removeFromLeft(knobGutter);
     placeKnob(gainCard, gainValueLabel, gainKnob, gainCaption, gainRangeHint);
     placeKnob(knobsRow, qValueLabel, qKnob, qCaption, qRangeHint);
 
@@ -1118,8 +1123,8 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
         dynPanelButton.setVisible(true);
         const int dynW = 32;
         const int dynBtnH = 13;
-        const int gap = 5;
-        const int valueW = 56;
+        const int gap = 4;
+        const int valueW = 52;
         const auto valRow = gainValueLabel.getBounds();
         auto group = juce::Rectangle<int>(valueW + gap + dynW, valRow.getHeight()).withCentre(valRow.getCentre());
         group = group.constrainedWithin(gainCard.reduced(6, 0));
@@ -1161,14 +1166,14 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
 
     if (dynOpen)
     {
-        r.removeFromTop(6);
-        auto dynHead = r.removeFromTop(18);
+        r.removeFromTop(4);
+        auto dynHead = r.removeFromTop(16);
         dynSectionLabel.setVisible(true);
         dynSectionLabel.setText("DYNAMICS", juce::dontSendNotification);
-        dynSectionLabel.setBounds(dynHead.removeFromLeft(72).withTrimmedTop(2));
+        dynSectionLabel.setBounds(dynHead.removeFromLeft(72).withTrimmedTop(1));
         dynHead.removeFromLeft(4);
         dynEnableButton.setVisible(true);
-        dynEnableButton.setBounds(dynHead.removeFromLeft(44).withHeight(16).withY(dynHead.getY() + 1));
+        dynEnableButton.setBounds(dynHead.removeFromLeft(44).withHeight(16).withY(dynHead.getY()));
 
         dynSidechainSlider.setVisible(false);
         dynSidechainSlider.setBounds({});
@@ -1207,35 +1212,35 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
 
         if (showDynSliders)
         {
-            const int labelW = 50;
-            const int rowH = 26;
-            const int gutter = 10;
+            const int labelW = 46;
+            const int rowH = 22;
+            const int gutter = 8;
 
             auto placeLabelSlider = [](juce::Rectangle<int> cell, juce::Label& l, juce::Slider& s, int lw)
             {
-                l.setBounds(cell.removeFromLeft(lw).withTrimmedTop(6));
-                s.setBounds(cell.reduced(0, 3));
+                l.setBounds(cell.removeFromLeft(lw).withTrimmedTop(4));
+                s.setBounds(cell.reduced(0, 2));
             };
 
-            r.removeFromTop(6);
+            r.removeFromTop(4);
             auto row1 = r.removeFromTop(rowH);
             {
-                auto thresh = row1.removeFromLeft(juce::jmax(240, row1.getWidth() * 58 / 100));
+                auto thresh = row1.removeFromLeft(juce::jmax(220, row1.getWidth() * 58 / 100));
                 row1.removeFromLeft(gutter);
                 auto comp = row1;
 
-                dynThresholdLabel.setBounds(thresh.removeFromLeft(44).withTrimmedTop(6));
+                dynThresholdLabel.setBounds(thresh.removeFromLeft(40).withTrimmedTop(4));
                 thresh.removeFromLeft(3);
-                dynThresholdAutoButton.setBounds(thresh.removeFromLeft(30).withHeight(18).withY(thresh.getY() + 4));
+                dynThresholdAutoButton.setBounds(thresh.removeFromLeft(30).withHeight(16).withY(thresh.getY() + 3));
                 thresh.removeFromLeft(4);
-                dynAutoThresholdButton.setBounds(thresh.removeFromLeft(42).withHeight(18).withY(thresh.getY() + 4));
-                thresh.removeFromLeft(6);
-                dynThresholdSlider.setBounds(thresh.reduced(0, 3));
+                dynAutoThresholdButton.setBounds(thresh.removeFromLeft(56).withHeight(16).withY(thresh.getY() + 3));
+                thresh.removeFromLeft(4);
+                dynThresholdSlider.setBounds(thresh.reduced(0, 2));
 
                 placeLabelSlider(comp, dynRangeLabel, dynRangeSlider, labelW);
             }
 
-            r.removeFromTop(6);
+            r.removeFromTop(4);
             auto row2 = r.removeFromTop(rowH);
             const int col = juce::jmax(100, (row2.getWidth() - 2 * gutter) / 3);
             placeLabelSlider(row2.removeFromLeft(col), dynRatioLabel, dynRatioSlider, labelW);
