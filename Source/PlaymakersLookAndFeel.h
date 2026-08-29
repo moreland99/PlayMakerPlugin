@@ -211,7 +211,6 @@ public:
                 accent = juce::Colour::fromString(c->toString());
 
         const bool large = (bool) slider.getProperties().getWithDefault("pmLargeKnob", false);
-        const bool bipolar = (bool) slider.getProperties().getWithDefault("pmBipolarArc", false);
         const bool showDynArc = (bool) slider.getProperties().getWithDefault("pmShowDynArc", false);
         // Same 0–1 position JUCE used for this paint. Path arcs and the needle must share it.
         const float prop = juce::jlimit(0.0f, 1.0f, sliderPosProportional);
@@ -243,34 +242,13 @@ public:
         g.setColour(juce::Colours::black.withAlpha((theme.isLight() ? 0.10f : 0.35f) * enabledA));
         g.fillEllipse(cx - bodyR + 1.0f, cy - bodyR + 2.5f, bodyR * 2.0f, bodyR * 2.0f);
 
-        // Quiet track.
+        // Quiet track. No yellow value/progress fill on Freq, Q, or Gain.
         {
             juce::Path track;
             track.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAng, endAng, true);
             g.setColour(theme.ink.withAlpha((theme.isLight() ? 0.14f : 0.22f) * enabledA));
             g.strokePath(track, juce::PathStrokeType(arcW, juce::PathStrokeType::curved,
                                                       juce::PathStrokeType::rounded));
-        }
-
-        // Value arc: Freq/Q fill from start; Gain fills from 0 dB. Skip Gain's bipolar
-        // fill while Dynamics is on — that arc is anchored at noon, not the needle, and
-        // reads as a drifting "range" when the user moves Gain.
-        if (!showDynArc)
-        {
-            juce::Path valueArc;
-            if (bipolar)
-            {
-                const float midAng = juce::jmap(0.5f, 0.0f, 1.0f, startAng, endAng);
-                valueArc.addCentredArc(cx, cy, arcR, arcR, 0.0f,
-                                       juce::jmin(midAng, needleAngle), juce::jmax(midAng, needleAngle), true);
-            }
-            else
-            {
-                valueArc.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAng, needleAngle, true);
-            }
-            g.setColour(accent.withAlpha(0.95f * enabledA));
-            g.strokePath(valueArc, juce::PathStrokeType(arcW + 0.4f, juce::PathStrokeType::curved,
-                                                        juce::PathStrokeType::rounded));
         }
 
         // Metal-ish body: outer rim + recessed face.
@@ -303,6 +281,39 @@ public:
         g.setColour(theme.softWhite.withAlpha((theme.isLight() ? 0.35f : 0.14f) * enabledA));
         g.drawEllipse(cx - faceR + 1.0f, cy - faceR + 1.0f, faceR * 2.0f - 2.0f, faceR * 2.0f - 2.0f, 1.0f);
 
+        // Dyn range/live: same needle-relative dB math as before. Filled face sectors,
+        // not exterior strokes. Under the needle. Skip |delta| < 0.05 (Range = 0 stays metal).
+        if (showDynArc)
+        {
+            juce::Colour dynAccent = accent;
+            if (auto* c = slider.getProperties().getVarPointer("pmDynArcColour"))
+                if (c->isString())
+                    dynAccent = juce::Colour::fromString(c->toString());
+
+            const double dynRangeDb = (double) slider.getProperties().getWithDefault("pmDynRangeDb", 0.0);
+            const double dynOffsetDb = (double) slider.getProperties().getWithDefault("pmDynOffsetDb", 0.0);
+            const double spanDb = slider.getMaximum() - slider.getMinimum();
+            const auto faceBounds = juce::Rectangle<float>(cx - faceR, cy - faceR, faceR * 2.0f, faceR * 2.0f);
+
+            auto fillDeltaFromNeedle = [&] (double deltaDb, juce::Colour colour)
+            {
+                if (spanDb <= 1.0e-6 || std::abs(deltaDb) < 0.05)
+                    return;
+                const float endProp = juce::jlimit(0.0f, 1.0f, prop + (float) (deltaDb / spanDb));
+                const float endAngle = juce::jmap(endProp, 0.0f, 1.0f, startAng, endAng);
+                if (std::abs(endAngle - needleAngle) < 0.008f)
+                    return;
+
+                juce::Path sector;
+                sector.addPieSegment(faceBounds, needleAngle, endAngle, 0.28f);
+                g.setColour(colour);
+                g.fillPath(sector);
+            };
+
+            fillDeltaFromNeedle(dynRangeDb, dynAccent.withAlpha(0.30f * enabledA));
+            fillDeltaFromNeedle(dynOffsetDb, dynAccent.withAlpha(0.90f * enabledA));
+        }
+
         // Needle — same angle and (sin, -cos) convention as Path::addCentredArc.
         const float needleInner = faceR * 0.12f;
         const float needleOuter = faceR * 0.88f;
@@ -314,54 +325,6 @@ public:
         const float tip = large ? 3.2f : 2.6f;
         g.setColour(accent.withAlpha(enabledA));
         g.fillEllipse(n1.x - tip, n1.y - tip, tip * 2.0f, tip * 2.0f);
-
-        // Dyn range/live: start at the needle's normalized position (same `prop` / angle).
-        // Endpoints are that prop plus dB/span — not a second convert of (gain+delta).
-        if (showDynArc)
-        {
-            juce::Colour dynAccent = accent;
-            if (auto* c = slider.getProperties().getVarPointer("pmDynArcColour"))
-                if (c->isString())
-                    dynAccent = juce::Colour::fromString(c->toString());
-
-            const double dynRangeDb = (double) slider.getProperties().getWithDefault("pmDynRangeDb", 0.0);
-            const double dynOffsetDb = (double) slider.getProperties().getWithDefault("pmDynOffsetDb", 0.0);
-            const double spanDb = slider.getMaximum() - slider.getMinimum();
-            const float dynR = needleOuter + tip + (large ? 3.0f : 2.0f);
-
-            auto strokeDeltaFromNeedle = [&] (double deltaDb, juce::Colour colour, float strokeW)
-            {
-                if (spanDb <= 1.0e-6 || std::abs(deltaDb) < 0.05)
-                    return;
-                const float endProp = juce::jlimit(0.0f, 1.0f, prop + (float) (deltaDb / spanDb));
-                const float endAngle = juce::jmap(endProp, 0.0f, 1.0f, startAng, endAng);
-                if (std::abs(endAngle - needleAngle) < 0.008f)
-                    return;
-
-                juce::Path p;
-                const int steps = juce::jmax(4, (int) std::ceil(std::abs(endAngle - needleAngle) / 0.06f));
-                for (int i = 0; i <= steps; ++i)
-                {
-                    const float t = (float) i / (float) steps;
-                    const float a = needleAngle + (endAngle - needleAngle) * t;
-                    const auto pt = pointOnRing(a, dynR);
-                    if (i == 0)
-                        p.startNewSubPath(pt);
-                    else
-                        p.lineTo(pt);
-                }
-                g.setColour(colour);
-                g.strokePath(p, juce::PathStrokeType(strokeW, juce::PathStrokeType::curved,
-                                                     juce::PathStrokeType::butt));
-            };
-
-            strokeDeltaFromNeedle(dynRangeDb,
-                                  dynAccent.withAlpha((theme.isLight() ? 0.35f : 0.40f) * enabledA),
-                                  large ? 5.0f : 3.6f);
-            strokeDeltaFromNeedle(dynOffsetDb,
-                                  dynAccent.withAlpha(0.95f * enabledA),
-                                  large ? 3.2f : 2.4f);
-        }
 
         const float cap = faceR * 0.16f;
         g.setColour((theme.isLight() ? theme.ink.withAlpha(0.18f) : juce::Colour(0xff1e1e22)).withMultipliedAlpha(enabledA));
