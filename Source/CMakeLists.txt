@@ -36,6 +36,7 @@ target_sources(PlaymakersEQ
         PluginEditor.cpp
         Params.cpp
         SpectrumAnalyzer.cpp
+        BandList.cpp
         PresetState.cpp
         PresetManager.cpp
         PresetBrowser.cpp

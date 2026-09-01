@@ -142,16 +142,14 @@ void SpectrumAnalyzerComponent::timerCallback()
 
 float SpectrumAnalyzerComponent::freqToX(float freq, float width)
 {
-    constexpr float minFreq = 20.0f, maxFreq = 20000.0f;
-    const auto norm = std::log(freq / minFreq) / std::log(maxFreq / minFreq);
-    return juce::jlimit(0.0f, 1.0f, norm) * width;
+    const float normalisedX = juce::jlimit(0.0f, 1.0f, Params::freqToNorm(freq));
+    return normalisedX * juce::jmax(0.0f, width);
 }
 
 float SpectrumAnalyzerComponent::xToFreq(float x, float width)
 {
-    constexpr float minFreq = 20.0f, maxFreq = 20000.0f;
-    const auto norm = juce::jlimit(0.0f, 1.0f, x / juce::jmax(1.0f, width));
-    return minFreq * std::pow(maxFreq / minFreq, norm);
+    const float normalisedX = juce::jlimit(0.0f, 1.0f, x / juce::jmax(1.0f, width));
+    return Params::normToFreq(normalisedX);
 }
 
 float SpectrumAnalyzerComponent::dbToY(float db, float height, float minDb, float maxDb)
@@ -203,7 +201,6 @@ void SpectrumAnalyzerComponent::paint(juce::Graphics& g)
     drawCombinedCurve(g);
     drawCreatePreview(g, layout.graph);
     drawBandHandles(g, layout.graph);
-    drawSelectionReadout(g, layout.graph);
     drawMarquee(g);
     drawSpectrumScale(g, layout.specScale, layout.graph);
     drawOutputMeters(g, layout.meters, layout.graph);
@@ -252,18 +249,24 @@ void SpectrumAnalyzerComponent::drawDbGrid(juce::Graphics& g, juce::Rectangle<fl
                                            juce::Rectangle<float> eqScale)
 {
     const float half = displayRangeHalfDb;
-    const float quarter = half * 0.5f;
+    const float step = (half <= 6.0f) ? 2.0f : (half <= 12.0f ? 3.0f : 6.0f);
+    const int n = juce::jmax(1, juce::roundToInt(half / step));
     g.setFont(Brand::uiFont(9.5f));
-    for (float db : { -half, -quarter, 0.0f, quarter, half })
+    for (int i = -n; i <= n; ++i)
     {
+        const float db = (float) i * step;
         const float y = graph.getY() + dbToY(db, graph.getHeight(), curveMinDb, curveMaxDb);
-        const bool zero = std::abs(db) < 0.01f;
-        g.setColour(theme.grid.withAlpha(zero ? 0.9f : 0.55f));
-        g.drawHorizontalLine((int) y, graph.getX(), graph.getRight());
+        const bool zero = i == 0;
+        g.setColour(theme.grid.withAlpha(zero ? 0.92f : (theme.isLight() ? 0.28f : 0.32f)));
+        if (zero)
+            g.fillRect(graph.getX(), y - 0.75f, graph.getWidth(), 1.5f);
+        else
+            g.drawHorizontalLine((int) y, graph.getX(), graph.getRight());
 
         auto dbLabel = juce::Rectangle<float>(eqScale.getX(), y - 7.0f, eqScale.getWidth() - 2.0f, 12.0f)
                            .constrainedWithin(eqScale.reduced(1.0f, 2.0f));
-        g.setColour(theme.ink.withAlpha(theme.isLight() ? 0.55f : 0.48f));
+        g.setColour(theme.ink.withAlpha(zero ? (theme.isLight() ? 0.62f : 0.55f)
+                                             : (theme.isLight() ? 0.42f : 0.36f)));
         g.drawText(juce::String((int) std::lround(db)),
                    dbLabel, juce::Justification::centredRight, false);
     }
@@ -271,6 +274,19 @@ void SpectrumAnalyzerComponent::drawDbGrid(juce::Graphics& g, juce::Rectangle<fl
 
 void SpectrumAnalyzerComponent::drawFrequencyGrid(juce::Graphics& g, juce::Rectangle<float> bounds)
 {
+    constexpr float minorHz[] = {
+        30.0f, 40.0f, 60.0f, 80.0f, 150.0f, 300.0f, 400.0f, 700.0f,
+        1500.0f, 3000.0f, 4000.0f, 7000.0f, 15000.0f
+    };
+    for (float hz : minorHz)
+    {
+        const float x = bounds.getX() + freqToX(hz, bounds.getWidth());
+        g.setColour(theme.grid.withAlpha(theme.isLight() ? 0.22f : 0.20f));
+        auto line = juce::Rectangle<float>(x - 0.5f, bounds.getY(), 1.0f, bounds.getHeight())
+                        .getIntersection(bounds);
+        g.fillRect(line);
+    }
+
     struct FreqMark { float hz; const char* label; };
     constexpr FreqMark marks[] = {
         { 20.0f, "20" }, { 50.0f, "50" }, { 100.0f, "100" }, { 200.0f, "200" }, { 500.0f, "500" },
@@ -411,35 +427,46 @@ void SpectrumAnalyzerComponent::drawSpectrumTrace(juce::Graphics& g, juce::Recta
     for (int x = 0; x < columns; ++x)
     {
         const float freqL = xToFreq((float) x, width);
+        const float freqC = xToFreq((float) x + 0.5f, width);
         const float freqR = xToFreq((float) juce::jmin(columns, x + 1), width);
         const int binL = juce::jlimit(1, lastBin, (int) (freqL * binScale));
         const int binR = juce::jlimit(1, lastBin, (int) (freqR * binScale));
 
-        float peak = magAtFreq(freqL);
+        const float center = magAtFreq(freqC);
+        float peak = center;
         if (binR > binL)
         {
             for (int b = binL; b <= binR; ++b)
                 peak = juce::jmax(peak, magnitudesDb[(size_t) b]);
         }
-        else
-        {
-            peak = juce::jmax(peak, magAtFreq(freqR));
-        }
 
-        spectrumDrawY[(size_t) x] = dbToY(peak, height, specMinDb, specMaxDb);
+        constexpr float peakBlend = 0.22f;
+        spectrumDrawY[(size_t) x] = dbToY(center + peakBlend * (peak - center),
+                                          height, specMinDb, specMaxDb);
     }
 
-    spectrumDrawScratch = spectrumDrawY;
-    for (int pass = 0; pass < 3; ++pass)
+    // 5-tap binomial × 7 (~2.6 px). Previous 3-tap × 3 was ~1 px and left a skyline.
+    if (columns >= 5)
     {
-        auto& src = (pass & 1) ? spectrumDrawY : spectrumDrawScratch;
-        auto& dst = (pass & 1) ? spectrumDrawScratch : spectrumDrawY;
-        dst[0] = src[0];
-        dst[(size_t) columns - 1] = src[(size_t) columns - 1];
-        for (int x = 1; x < columns - 1; ++x)
-            dst[(size_t) x] = 0.20f * src[(size_t) (x - 1)]
-                            + 0.60f * src[(size_t) x]
-                            + 0.20f * src[(size_t) (x + 1)];
+        spectrumDrawScratch = spectrumDrawY;
+        constexpr int smoothPasses = 7;
+        for (int pass = 0; pass < smoothPasses; ++pass)
+        {
+            auto& src = (pass & 1) ? spectrumDrawY : spectrumDrawScratch;
+            auto& dst = (pass & 1) ? spectrumDrawScratch : spectrumDrawY;
+            dst[0] = src[0];
+            dst[1] = 0.20f * src[0] + 0.60f * src[1] + 0.20f * src[2];
+            dst[(size_t) columns - 1] = src[(size_t) columns - 1];
+            dst[(size_t) columns - 2] = 0.20f * src[(size_t) columns - 3]
+                                      + 0.60f * src[(size_t) columns - 2]
+                                      + 0.20f * src[(size_t) columns - 1];
+            for (int x = 2; x < columns - 2; ++x)
+                dst[(size_t) x] = 0.0625f * src[(size_t) (x - 2)]
+                                + 0.2500f * src[(size_t) (x - 1)]
+                                + 0.3750f * src[(size_t) x]
+                                + 0.2500f * src[(size_t) (x + 1)]
+                                + 0.0625f * src[(size_t) (x + 2)];
+        }
     }
 
     juce::Path path;
@@ -498,7 +525,7 @@ void SpectrumAnalyzerComponent::buildResponsePaths(juce::Path& stroke, juce::Pat
     for (int i = 0; i < points; ++i)
     {
         const auto norm = points > 1 ? (float) i / (float) (points - 1) : 0.0f;
-        const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
+        const auto probeFreq = (double) Params::normToFreq(norm);
         const auto magnitude = FilterBand::getMagnitudeForFrequency(stages, probeFreq, sampleRate);
         const auto db = juce::Decibels::gainToDecibels((float) magnitude, -100.0f);
         const auto x = bounds.getX() + norm * width;
@@ -674,7 +701,7 @@ void SpectrumAnalyzerComponent::rebuildCurveCache(juce::Rectangle<float> bounds)
             for (int p = 0; p < points; ++p)
             {
                 const auto norm = points > 1 ? (float) p / (float) (points - 1) : 0.0f;
-                const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
+                const auto probeFreq = (double) Params::normToFreq(norm);
                 const auto dbA = juce::Decibels::gainToDecibels(
                     (float) FilterBand::getMagnitudeForFrequency(stages[(size_t) i], probeFreq, sampleRate), -100.0f);
                 const float x = bounds.getX() + norm * width;
@@ -696,7 +723,7 @@ void SpectrumAnalyzerComponent::rebuildCurveCache(juce::Rectangle<float> bounds)
                 for (int p = points - 1; p >= 0; --p)
                 {
                     const auto norm = points > 1 ? (float) p / (float) (points - 1) : 0.0f;
-                    const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
+                    const auto probeFreq = (double) Params::normToFreq(norm);
                     const auto dbB = juce::Decibels::gainToDecibels(
                         (float) FilterBand::getMagnitudeForFrequency(extreme, probeFreq, sampleRate), -100.0f);
                     cache.dynFill.lineTo(bounds.getX() + norm * width,
@@ -719,7 +746,7 @@ void SpectrumAnalyzerComponent::rebuildCurveCache(juce::Rectangle<float> bounds)
         for (int p = 0; p < points; ++p)
         {
             const auto norm = points > 1 ? (float) p / (float) (points - 1) : 0.0f;
-            const auto probeFreq = 20.0 * std::pow(1000.0, (double) norm);
+            const auto probeFreq = (double) Params::normToFreq(norm);
             double totalMag = 1.0;
 
             for (int i = 0; i < Params::numBands; ++i)
@@ -828,45 +855,6 @@ void SpectrumAnalyzerComponent::drawBandHandles(juce::Graphics& g, juce::Rectang
     }
 }
 
-void SpectrumAnalyzerComponent::drawSelectionReadout(juce::Graphics& g, juce::Rectangle<float> bounds)
-{
-    const int band = getPrimarySelectedBand();
-    if (band < 0)
-        return;
-
-    const auto freq = apvts.getRawParameterValue(Params::bandParamID(band, "freq"))->load();
-    const auto gain = apvts.getRawParameterValue(Params::bandParamID(band, "gain"))->load();
-    const auto q = apvts.getRawParameterValue(Params::bandParamID(band, "q"))->load();
-    const auto pos = handlePosition(band, bounds);
-    const auto colour = Theme::bandColour(band, theme.isLight());
-
-    const auto label = formatFrequency(freq)
-                       + "   " + juce::String(gain, 1) + " dB"
-                       + "   Q " + juce::String(q, 2);
-
-    g.setFont(Brand::uiFont(11.0f, true));
-    const auto textW = 168.0f;
-    const auto textH = 18.0f;
-    auto bubble = juce::Rectangle<float>(textW, textH)
-                      .withCentre({ pos.x, pos.y - 20.0f });
-    bubble = bubble.constrainedWithin(bounds.reduced(4.0f));
-    auto frame = bubble.expanded(8.0f, 4.0f);
-
-    g.setColour(theme.isLight() ? theme.softWhite.withAlpha(0.96f) : theme.panel.withAlpha(0.94f));
-    g.fillRect(frame);
-    g.setColour(colour.withAlpha(0.9f));
-    g.drawRect(frame, 1.0f);
-    g.setColour(theme.isLight() ? theme.ink : theme.softWhite);
-    g.drawFittedText(label, bubble.toNearestInt(), juce::Justification::centred, 1);
-}
-
-juce::String SpectrumAnalyzerComponent::formatFrequency(float freqHz)
-{
-    if (freqHz >= 1000.0f)
-        return juce::String(freqHz / 1000.0f, freqHz >= 10000.0f ? 1 : 2) + " kHz";
-    return juce::String(freqHz, freqHz >= 100.0f ? 0 : 1) + " Hz";
-}
-
 int SpectrumAnalyzerComponent::getPrimarySelectedBand() const
 {
     if (primaryBand >= 0 && isSelected(primaryBand)
@@ -886,6 +874,11 @@ juce::Point<float> SpectrumAnalyzerComponent::getPrimaryHandlePosition() const
     if (band < 0)
         return bounds.getCentre();
     return handlePosition(band, bounds);
+}
+
+juce::Rectangle<float> SpectrumAnalyzerComponent::getGraphArea() const
+{
+    return layoutRail().graph;
 }
 
 juce::Array<int> SpectrumAnalyzerComponent::getSelectedBandIndices() const
@@ -1001,7 +994,7 @@ void SpectrumAnalyzerComponent::setBandFreq(int bandIndex, float freqHz)
 {
     if (auto* p = dynamic_cast<juce::AudioParameterFloat*>(
             apvts.getParameter(Params::bandParamID(bandIndex, "freq"))))
-        p->setValueNotifyingHost(p->convertTo0to1(juce::jlimit(20.0f, 20000.0f, freqHz)));
+        p->setValueNotifyingHost(p->convertTo0to1(juce::jlimit(Params::minFreqHz, Params::maxFreqHz, freqHz)));
 }
 
 void SpectrumAnalyzerComponent::setBandGain(int bandIndex, float gainDb)

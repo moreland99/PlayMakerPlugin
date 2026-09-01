@@ -88,7 +88,7 @@ public:
 
         g.setColour(textCol);
         g.drawFittedText(button.getButtonText(),
-                         button.getLocalBounds().reduced(8, 0),
+                         button.getLocalBounds().reduced((bool) button.getProperties().getWithDefault("pmCompact", false) ? 3 : 8, 0),
                          juce::Justification::centred, 1, 0.9f);
     }
 
@@ -211,56 +211,44 @@ public:
                 accent = juce::Colour::fromString(c->toString());
 
         const bool large = (bool) slider.getProperties().getWithDefault("pmLargeKnob", false);
-        const bool bipolar = (bool) slider.getProperties().getWithDefault("pmBipolarArc", false);
-        // Prefer parameter proportion so skewed ranges (freq) map correctly.
-        const float prop = (float) slider.valueToProportionOfLength(slider.getValue());
+        const bool showDynArc = (bool) slider.getProperties().getWithDefault("pmShowDynArc", false);
+        // Same 0–1 position JUCE used for this paint. Path arcs and the needle must share it.
+        const float prop = juce::jlimit(0.0f, 1.0f, sliderPosProportional);
         const float startAng = rotaryStartAngle;
         const float endAng = rotaryEndAngle;
-        const float angle = juce::jmap(prop, 0.0f, 1.0f, startAng, endAng);
+        const float needleAngle = juce::jmap(prop, 0.0f, 1.0f, startAng, endAng);
 
         const auto bounds = juce::Rectangle<float>((float) x, (float) y, (float) width, (float) height);
         const float size = juce::jmin(bounds.getWidth(), bounds.getHeight());
         const float cx = bounds.getCentreX();
         const float cy = bounds.getCentreY();
         const float enabledA = slider.isEnabled() ? 1.0f : 0.42f;
+        // JUCE rotary/path convention: 0 rad = 12 o'clock, increasing clockwise
+        // (sin, -cos). Math cos/sin is 90° off (3 o'clock) and must not be used here.
+        auto pointOnRing = [cx, cy] (float ang, float radius) -> juce::Point<float>
+        {
+            return { cx + radius * std::sin(ang), cy - radius * std::cos(ang) };
+        };
 
         // Fill most of the control — solid dial, not a thin “gadget” ring.
-        const float outerR = size * (large ? 0.48f : 0.46f);
-        const float arcR = outerR * 0.96f;
-        const float bodyR = outerR * 0.78f;
+        const float outerR = size * (large ? 0.49f : 0.46f);
+        const float arcR = outerR * 0.97f;
+        const float bodyR = outerR * (large ? 0.82f : 0.78f);
         const float rimR = bodyR * 0.92f;
-        const float faceR = bodyR * 0.72f;
-        const float arcW = large ? 3.6f : 2.8f;
+        const float faceR = bodyR * 0.74f;
+        const float arcW = large ? 4.2f : 2.8f;
 
         // Soft drop under the dial.
         g.setColour(juce::Colours::black.withAlpha((theme.isLight() ? 0.10f : 0.35f) * enabledA));
         g.fillEllipse(cx - bodyR + 1.0f, cy - bodyR + 2.5f, bodyR * 2.0f, bodyR * 2.0f);
 
-        // Quiet track.
+        // Quiet track. No yellow value/progress fill on Freq, Q, or Gain.
         {
             juce::Path track;
             track.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAng, endAng, true);
             g.setColour(theme.ink.withAlpha((theme.isLight() ? 0.14f : 0.22f) * enabledA));
             g.strokePath(track, juce::PathStrokeType(arcW, juce::PathStrokeType::curved,
                                                       juce::PathStrokeType::rounded));
-        }
-
-        // Value arc (bipolar from noon for gain).
-        {
-            juce::Path valueArc;
-            if (bipolar)
-            {
-                const float midAng = juce::jmap(0.5f, 0.0f, 1.0f, startAng, endAng);
-                valueArc.addCentredArc(cx, cy, arcR, arcR, 0.0f,
-                                       juce::jmin(midAng, angle), juce::jmax(midAng, angle), true);
-            }
-            else
-            {
-                valueArc.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAng, angle, true);
-            }
-            g.setColour(accent.withAlpha(0.95f * enabledA));
-            g.strokePath(valueArc, juce::PathStrokeType(arcW + 0.4f, juce::PathStrokeType::curved,
-                                                        juce::PathStrokeType::rounded));
         }
 
         // Metal-ish body: outer rim + recessed face.
@@ -293,26 +281,54 @@ public:
         g.setColour(theme.softWhite.withAlpha((theme.isLight() ? 0.35f : 0.14f) * enabledA));
         g.drawEllipse(cx - faceR + 1.0f, cy - faceR + 1.0f, faceR * 2.0f - 2.0f, faceR * 2.0f - 2.0f, 1.0f);
 
-        // Needle.
+        // Dyn range/live: same needle-relative dB math as before. Filled face sectors,
+        // not exterior strokes. Under the needle. Skip |delta| < 0.05 (Range = 0 stays metal).
+        if (showDynArc)
+        {
+            juce::Colour dynAccent = accent;
+            if (auto* c = slider.getProperties().getVarPointer("pmDynArcColour"))
+                if (c->isString())
+                    dynAccent = juce::Colour::fromString(c->toString());
+
+            const double dynRangeDb = (double) slider.getProperties().getWithDefault("pmDynRangeDb", 0.0);
+            const double dynOffsetDb = (double) slider.getProperties().getWithDefault("pmDynOffsetDb", 0.0);
+            const double spanDb = slider.getMaximum() - slider.getMinimum();
+            const auto faceBounds = juce::Rectangle<float>(cx - faceR, cy - faceR, faceR * 2.0f, faceR * 2.0f);
+
+            auto fillDeltaFromNeedle = [&] (double deltaDb, juce::Colour colour)
+            {
+                if (spanDb <= 1.0e-6 || std::abs(deltaDb) < 0.05)
+                    return;
+                const float endProp = juce::jlimit(0.0f, 1.0f, prop + (float) (deltaDb / spanDb));
+                const float endAngle = juce::jmap(endProp, 0.0f, 1.0f, startAng, endAng);
+                if (std::abs(endAngle - needleAngle) < 0.008f)
+                    return;
+
+                juce::Path sector;
+                sector.addPieSegment(faceBounds, needleAngle, endAngle, 0.28f);
+                g.setColour(colour);
+                g.fillPath(sector);
+            };
+
+            fillDeltaFromNeedle(dynRangeDb, dynAccent.withAlpha(0.30f * enabledA));
+            fillDeltaFromNeedle(dynOffsetDb, dynAccent.withAlpha(0.90f * enabledA));
+        }
+
+        // Needle — same angle and (sin, -cos) convention as Path::addCentredArc.
         const float needleInner = faceR * 0.12f;
         const float needleOuter = faceR * 0.88f;
-        const float nx0 = cx + std::cos(angle) * needleInner;
-        const float ny0 = cy + std::sin(angle) * needleInner;
-        const float nx1 = cx + std::cos(angle) * needleOuter;
-        const float ny1 = cy + std::sin(angle) * needleOuter;
+        const auto n0 = pointOnRing(needleAngle, needleInner);
+        const auto n1 = pointOnRing(needleAngle, needleOuter);
         g.setColour((theme.isLight() ? theme.ink : theme.softWhite).withAlpha(0.95f * enabledA));
-        g.drawLine(nx0, ny0, nx1, ny1, large ? 2.4f : 2.0f);
+        g.drawLine(n0.x, n0.y, n1.x, n1.y, large ? 2.4f : 2.0f);
 
-        // Tip dot in band accent.
         const float tip = large ? 3.2f : 2.6f;
         g.setColour(accent.withAlpha(enabledA));
-        g.fillEllipse(nx1 - tip, ny1 - tip, tip * 2.0f, tip * 2.0f);
+        g.fillEllipse(n1.x - tip, n1.y - tip, tip * 2.0f, tip * 2.0f);
 
-        // Center cap.
         const float cap = faceR * 0.16f;
         g.setColour((theme.isLight() ? theme.ink.withAlpha(0.18f) : juce::Colour(0xff1e1e22)).withMultipliedAlpha(enabledA));
         g.fillEllipse(cx - cap, cy - cap, cap * 2.0f, cap * 2.0f);
-        juce::ignoreUnused(sliderPosProportional);
     }
 
     void drawLinearSlider(juce::Graphics& g, int x, int y, int width, int height,

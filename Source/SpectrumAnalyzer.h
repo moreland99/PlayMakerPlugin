@@ -95,11 +95,15 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 
-    // Selection API for the band inspector.
+    // Selection API for the band inspector / band list.
     int getPrimarySelectedBand() const;
     juce::Array<int> getSelectedBandIndices() const;
     void deleteSelectedBands();
     juce::Point<float> getPrimaryHandlePosition() const;
+    juce::Rectangle<float> getGraphArea() const;
+    void selectOnly(int bandIndex);
+    void toggleSelection(int bandIndex);
+    bool isSelected(int bandIndex) const;
     std::function<void()> onSelectionChanged;
     std::function<void()> onBandMoved;
 
@@ -165,9 +169,7 @@ private:
     void drawCreatePreview(juce::Graphics& g, juce::Rectangle<float> bounds);
     void drawMarquee(juce::Graphics& g);
     void drawEmptyState(juce::Graphics& g, juce::Rectangle<float> bounds);
-    void drawSelectionReadout(juce::Graphics& g, juce::Rectangle<float> bounds);
     void notifySelectionChanged();
-    static juce::String formatFrequency(float freqHz);
     void drawResponsePath(juce::Graphics& g, juce::Rectangle<float> bounds,
                           const FilterBand::StageSet& stages,
                           juce::Colour colour, float strokeWidth, float fillAlpha = 0.0f);
@@ -189,10 +191,7 @@ private:
     void endBandGesture(int bandIndex);
     void endBandGesture(int bandIndex, std::initializer_list<const char*> suffixes);
 
-    void selectOnly(int bandIndex);
-    void toggleSelection(int bandIndex);
     void clearSelection();
-    bool isSelected(int bandIndex) const;
     void selectBandsInMarquee(juce::Rectangle<float> bounds);
     void commitCreateAt(float freqHz, float gainDb);
     void deleteBand(int bandIndex);
@@ -288,8 +287,7 @@ private:
     static constexpr float lowZoneMaxHz = 250.0f;
     static constexpr float highZoneMinHz = 5000.0f;
     static constexpr float defaultQ = 0.707f;
-    static constexpr float railWidth = 74.0f;
-    static constexpr float eqScaleWidth = 28.0f;
-    static constexpr float specScaleWidth = 22.0f;
-    static constexpr float meterWidth = 24.0f;
+    static constexpr float railWidth = 66.0f;
+    static constexpr float specScaleWidth = 20.0f;
+    static constexpr float meterWidth = 22.0f;
 };

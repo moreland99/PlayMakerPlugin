@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <cmath>
 
 namespace Params
 {
@@ -85,6 +86,50 @@ inline bool typeSupportsDynamics(FilterType t)
 inline bool typeSupportsSlope(FilterType t)
 {
     return t == FilterType::lowCut || t == FilterType::highCut;
+}
+
+// True-log frequency map (20 Hz–20 kHz). Shared by the Freq knob, DSP parameter,
+// analyzer node X, and the frequency grid so they never disagree.
+constexpr float minFreqHz = 20.0f;
+constexpr float maxFreqHz = 20000.0f;
+
+inline float freqToNorm(float freqHz)
+{
+    const double hz = juce::jlimit((double) minFreqHz, (double) maxFreqHz, (double) freqHz);
+    const double n = std::log(hz / (double) minFreqHz) / std::log((double) maxFreqHz / (double) minFreqHz);
+    return (float) juce::jlimit(0.0, 1.0, n);
+}
+
+inline float normToFreq(float norm)
+{
+    const double n = juce::jlimit(0.0, 1.0, (double) norm);
+    return (float) ((double) minFreqHz * std::pow((double) maxFreqHz / (double) minFreqHz, n));
+}
+
+inline juce::NormalisableRange<float> frequencyRange()
+{
+    return {
+        minFreqHz,
+        maxFreqHz,
+        [] (float start, float end, float proportion) -> float
+        {
+            const double n = juce::jlimit(0.0, 1.0, (double) proportion);
+            return (float) ((double) start * std::pow((double) end / (double) start, n));
+        },
+        [] (float start, float end, float value) -> float
+        {
+            const double hz = juce::jlimit((double) start, (double) end, (double) value);
+            const double n = std::log(hz / (double) start) / std::log((double) end / (double) start);
+            return (float) juce::jlimit(0.0, 1.0, n);
+        }
+    };
+}
+
+inline juce::String formatFrequency(float freqHz)
+{
+    if (freqHz >= 1000.0f)
+        return juce::String(freqHz / 1000.0f, freqHz >= 10000.0f ? 1 : 2) + " kHz";
+    return juce::String(freqHz, 1) + " Hz";
 }
 
 inline juce::String bandParamID(int bandIndex, const juce::String& suffix)
