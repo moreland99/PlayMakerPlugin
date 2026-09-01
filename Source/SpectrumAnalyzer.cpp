@@ -201,7 +201,6 @@ void SpectrumAnalyzerComponent::paint(juce::Graphics& g)
     drawCombinedCurve(g);
     drawCreatePreview(g, layout.graph);
     drawBandHandles(g, layout.graph);
-    drawSelectionReadout(g, layout.graph);
     drawMarquee(g);
     drawSpectrumScale(g, layout.specScale, layout.graph);
     drawOutputMeters(g, layout.meters, layout.graph);
@@ -854,43 +853,6 @@ void SpectrumAnalyzerComponent::drawBandHandles(juce::Graphics& g, juce::Rectang
         g.setColour(theme.softWhite.withAlpha(selected ? 0.85f : 0.35f));
         g.drawEllipse(pos.x - radius, pos.y - radius, radius * 2.0f, radius * 2.0f, 1.15f);
     }
-}
-
-void SpectrumAnalyzerComponent::drawSelectionReadout(juce::Graphics& g, juce::Rectangle<float> bounds)
-{
-    const int band = getPrimarySelectedBand();
-    if (band < 0)
-        return;
-
-    const auto freq = apvts.getRawParameterValue(Params::bandParamID(band, "freq"))->load();
-    const auto gain = apvts.getRawParameterValue(Params::bandParamID(band, "gain"))->load();
-    const auto q = apvts.getRawParameterValue(Params::bandParamID(band, "q"))->load();
-    const auto pos = handlePosition(band, bounds);
-    const auto colour = Theme::bandColour(band, theme.isLight());
-
-    const auto label = formatFrequency(freq)
-                       + "   " + juce::String(gain, 1) + " dB"
-                       + "   Q " + juce::String(q, 2);
-
-    g.setFont(Brand::uiFont(11.0f, true));
-    const auto textW = 168.0f;
-    const auto textH = 18.0f;
-    auto bubble = juce::Rectangle<float>(textW, textH)
-                      .withCentre({ pos.x, pos.y - 20.0f });
-    bubble = bubble.constrainedWithin(bounds.reduced(4.0f));
-    auto frame = bubble.expanded(8.0f, 4.0f);
-
-    g.setColour(theme.isLight() ? theme.softWhite.withAlpha(0.96f) : theme.panel.withAlpha(0.94f));
-    g.fillRect(frame);
-    g.setColour(colour.withAlpha(0.9f));
-    g.drawRect(frame, 1.0f);
-    g.setColour(theme.isLight() ? theme.ink : theme.softWhite);
-    g.drawFittedText(label, bubble.toNearestInt(), juce::Justification::centred, 1);
-}
-
-juce::String SpectrumAnalyzerComponent::formatFrequency(float freqHz)
-{
-    return Params::formatFrequency(freqHz);
 }
 
 int SpectrumAnalyzerComponent::getPrimarySelectedBand() const

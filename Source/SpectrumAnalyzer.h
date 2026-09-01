@@ -169,9 +169,7 @@ private:
     void drawCreatePreview(juce::Graphics& g, juce::Rectangle<float> bounds);
     void drawMarquee(juce::Graphics& g);
     void drawEmptyState(juce::Graphics& g, juce::Rectangle<float> bounds);
-    void drawSelectionReadout(juce::Graphics& g, juce::Rectangle<float> bounds);
     void notifySelectionChanged();
-    static juce::String formatFrequency(float freqHz);
     void drawResponsePath(juce::Graphics& g, juce::Rectangle<float> bounds,
                           const FilterBand::StageSet& stages,
                           juce::Colour colour, float strokeWidth, float fillAlpha = 0.0f);

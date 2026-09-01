@@ -28,6 +28,51 @@ public:
     }
 };
 
+class BandNodeHud : public juce::Component
+{
+public:
+    juce::TextButton soloButton { "S" };
+    juce::TextButton removeButton { juce::CharPointer_UTF8 ("\xc3\x97") };
+    juce::Label metrics;
+    juce::Colour fill { 0xf0101014 };
+    juce::Colour border { 0xffde5f41 };
+
+    BandNodeHud()
+    {
+        setInterceptsMouseClicks(true, true);
+        addAndMakeVisible(soloButton);
+        addAndMakeVisible(removeButton);
+        addAndMakeVisible(metrics);
+        soloButton.setClickingTogglesState(true);
+        soloButton.getProperties().set("pmCompact", true);
+        removeButton.setClickingTogglesState(false);
+        removeButton.getProperties().set("pmCompact", true);
+        removeButton.getProperties().set("pmAccent", false);
+        metrics.setJustificationType(juce::Justification::centredLeft);
+        metrics.setInterceptsMouseClicks(false, false);
+        metrics.setMinimumHorizontalScale(0.75f);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(2, 3);
+        soloButton.setBounds(r.removeFromLeft(16));
+        r.removeFromLeft(3);
+        removeButton.setBounds(r.removeFromLeft(16));
+        r.removeFromLeft(6);
+        metrics.setBounds(r);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto frame = getLocalBounds().toFloat().reduced(0.5f);
+        g.setColour(fill);
+        g.fillRect(frame);
+        g.setColour(border.withAlpha(0.9f));
+        g.drawRect(frame, 1.0f);
+    }
+};
+
 class PlaymakersEQAudioProcessorEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
@@ -62,6 +107,11 @@ private:
     void updateMetricModeVisibility(bool hasSelection);
     void reparentBandControlsForMode(bool knobs);
     void layoutFloatingBandPanel(juce::Rectangle<int> graphBounds);
+    void layoutBandNodeHud();
+    void layoutSecondarySheet();
+    void hideSecondarySheet();
+    void setSecondarySheetOpen(bool open);
+    bool isSecondarySheetBusy() const;
     void applyFloatingExtrasVisibility(bool extras);
     void updateDynPanelButton();
     void updateDynSidechainButton();
@@ -74,6 +124,8 @@ private:
     SpectrumAnalyzerComponent analyzer;
     BandListComponent bandList;
     FloatingBandPanel floatingBandPanel;
+    FloatingBandPanel secondarySheet;
+    BandNodeHud bandNodeHud;
 
     juce::Rectangle<int> brandLockupBounds;
     juce::Rectangle<int> inspectorBounds;
@@ -107,7 +159,6 @@ private:
     juce::TextButton metricModeButton { "Knobs" };
     juce::TextButton moreButton { "More" };
     juce::TextButton dynPanelButton { "Dyn" };
-    juce::TextButton dynDetailsButton { "▾" };
     juce::TextButton bandListButton { "Bands" };
     bool hubExtrasOpen = false;
     bool dynPanelOpen = false;
