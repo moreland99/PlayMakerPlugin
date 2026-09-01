@@ -224,6 +224,14 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
         setSecondarySheetOpen(moreButton.getToggleState());
     };
 
+    popupCloseButton.setClickingTogglesState(false);
+    popupCloseButton.getProperties().set("pmCompact", true);
+    popupCloseButton.setTooltip("Dismiss band controls (does not remove the band). Shortcut: Esc");
+    popupCloseButton.onClick = [this]
+    {
+        dismissSelectedBandUi();
+    };
+
     bandListButton.setClickingTogglesState(true);
     bandListButton.setTooltip("Show or hide the band list.");
     bandListButton.setToggleState(bandListOpen, juce::dontSendNotification);
@@ -409,8 +417,6 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     addAndMakeVisible(presetBrowser);
 
     addAndMakeVisible(analyzer);
-    analyzer.addAndMakeVisible(bandNodeHud);
-    bandNodeHud.toFront(false);
     bandNodeHud.soloButton.setTooltip("Solo this band (only solo'd bands affect audio). Shortcut: S");
     bandNodeHud.soloButton.onClick = [this]
     {
@@ -422,6 +428,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     };
     bandNodeHud.removeButton.setTooltip("Remove selected band(s)");
     bandNodeHud.removeButton.setClickingTogglesState(false);
+    bandNodeHud.removeButton.setTriggeredOnMouseDown(true);
     bandNodeHud.removeButton.onClick = [this]
     {
         analyzer.deleteSelectedBands();
@@ -433,6 +440,8 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     bandList.setVisible(false);
     addChildComponent(floatingBandPanel);
     addChildComponent(secondarySheet);
+    addAndMakeVisible(bandNodeHud);
+    bandNodeHud.setVisible(false);
     floatingBandPanel.accentColour = [this]
     {
         const int b = analyzer.getPrimarySelectedBand();
@@ -449,6 +458,7 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     addAndMakeVisible(qValueLabel);
     addAndMakeVisible(metricModeButton);
     addAndMakeVisible(moreButton);
+    addAndMakeVisible(popupCloseButton);
     floatingBandPanel.addAndMakeVisible(dynPanelButton);
     addAndMakeVisible(freqKnob);
     addAndMakeVisible(gainKnob);
@@ -497,16 +507,49 @@ PlaymakersEQAudioProcessorEditor::PlaymakersEQAudioProcessorEditor(PlaymakersEQA
     refreshInspector();
 
     setWantsKeyboardFocus(true);
+    analyzer.setWantsKeyboardFocus(true);
+    floatingBandPanel.setWantsKeyboardFocus(true);
+    secondarySheet.setWantsKeyboardFocus(true);
+    attachEditorKeyListeners(true);
     startTimerHz(15);
     setResizable(true, true);
     setResizeLimits(1080, 600, 2000, 1400);
     setSize(normalWidth, normalHeight);
+    grabKeyboardFocus();
 }
 
 PlaymakersEQAudioProcessorEditor::~PlaymakersEQAudioProcessorEditor()
 {
+    attachEditorKeyListeners(false);
     clearInspectorBindings();
     setLookAndFeel(nullptr);
+}
+
+void PlaymakersEQAudioProcessorEditor::attachEditorKeyListeners(bool attach)
+{
+    juce::Component* targets[] = { this, &analyzer };
+
+    for (auto* c : targets)
+    {
+        if (attach)
+            c->addKeyListener(this);
+        else
+            c->removeKeyListener(this);
+    }
+}
+
+void PlaymakersEQAudioProcessorEditor::dismissSelectedBandUi()
+{
+    analyzer.selectOnly(-1);
+    refreshInspector();
+    layoutBandNodeHud();
+    analyzer.repaint();
+}
+
+void PlaymakersEQAudioProcessorEditor::visibilityChanged()
+{
+    if (isShowing())
+        grabKeyboardFocus();
 }
 
 void PlaymakersEQAudioProcessorEditor::loadAnalyzerOptionsFromState()
@@ -882,15 +925,15 @@ void PlaymakersEQAudioProcessorEditor::refreshInspector()
 
 void PlaymakersEQAudioProcessorEditor::layoutBandNodeHud()
 {
+    if (bandNodeHud.soloButton.isDown() || bandNodeHud.removeButton.isDown())
+        return;
+
     const int primary = analyzer.getPrimarySelectedBand();
     if (primary < 0)
     {
         bandNodeHud.setVisible(false);
         return;
     }
-
-    if (bandNodeHud.soloButton.isMouseButtonDown() || bandNodeHud.removeButton.isMouseButtonDown())
-        return;
 
     const auto& t = themeManager.current();
     const auto freq = eqProcessor.apvts.getRawParameterValue(Params::bandParamID(primary, "freq"))->load();
@@ -917,14 +960,17 @@ void PlaymakersEQAudioProcessorEditor::layoutBandNodeHud()
     bandNodeHud.removeButton.getProperties().set("pmAccentColour", colourStr);
     bandNodeHud.removeButton.setToggleState(false, juce::dontSendNotification);
 
-    const auto graph = analyzer.getGraphArea().toNearestInt();
+    const auto origin = analyzer.getBounds().getPosition();
+    const auto graph = analyzer.getGraphArea().toNearestInt() + origin;
     const auto handle = analyzer.getPrimaryHandlePosition();
     auto frame = juce::Rectangle<int>(214, 22);
-    frame.setCentre(juce::roundToInt(handle.x), juce::roundToInt(handle.y - 20.0f));
+    frame.setCentre(juce::roundToInt(handle.x) + origin.x,
+                    juce::roundToInt(handle.y - 20.0f) + origin.y);
     if (graph.getWidth() > 8 && graph.getHeight() > 8)
         frame = frame.constrainedWithin(graph.reduced(4));
     bandNodeHud.setBounds(frame);
     bandNodeHud.setVisible(true);
+    bandNodeHud.toFront(false);
     bandNodeHud.soloButton.repaint();
     bandNodeHud.removeButton.repaint();
     bandNodeHud.repaint();
@@ -1027,7 +1073,7 @@ void PlaymakersEQAudioProcessorEditor::reparentBandControlsForMode(bool knobs)
             &freqValueLabel, &gainValueLabel, &qValueLabel,
             &freqKnob, &gainKnob, &qKnob,
             &freqRangeHint, &gainRangeHint, &qRangeHint,
-            &typeLabel, &typeBox, &metricModeButton, &moreButton })
+            &typeLabel, &typeBox, &metricModeButton, &moreButton, &popupCloseButton })
         attachMain(*c);
 
     for (auto* c : std::initializer_list<juce::Component*> {
@@ -1068,6 +1114,7 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     {
         floatingBandPanel.setVisible(false);
         moreButton.setVisible(false);
+        popupCloseButton.setVisible(false);
         dynPanelButton.setVisible(false);
         hideSecondarySheet();
         removeButton.setVisible(false);
@@ -1152,6 +1199,10 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     typeBox.setVisible(true);
     typeBox.setBounds(head.removeFromLeft(110).withHeight(16).withY(head.getY() + 1));
     typeLabel.setBounds({});
+    popupCloseButton.setVisible(true);
+    popupCloseButton.setToggleState(false, juce::dontSendNotification);
+    popupCloseButton.setBounds(head.removeFromRight(16).withHeight(16).withY(head.getY() + 1));
+    head.removeFromRight(4);
     moreButton.setVisible(true);
     moreButton.setButtonText("More");
     moreButton.setToggleState(hubExtrasOpen, juce::dontSendNotification);
@@ -1218,6 +1269,8 @@ void PlaymakersEQAudioProcessorEditor::layoutFloatingBandPanel(juce::Rectangle<i
     qRangeHint.setVisible(false);
 
     layoutSecondarySheet();
+    if (bandNodeHud.isVisible())
+        bandNodeHud.toFront(false);
 }
 
 void PlaymakersEQAudioProcessorEditor::setSecondarySheetOpen(bool open)
@@ -1311,7 +1364,7 @@ void PlaymakersEQAudioProcessorEditor::layoutSecondarySheet()
 
         juce::Rectangle<int> avoid;
         if (bandNodeHud.isVisible() && !bandNodeHud.getBounds().isEmpty())
-            avoid = getLocalArea(&analyzer, bandNodeHud.getBounds()).expanded(4);
+            avoid = bandNodeHud.getBounds().expanded(4);
         const auto handle = analyzer.getPrimaryHandlePosition().toInt() + origin;
         avoid = avoid.getUnion(juce::Rectangle<int>(44, 44).withCentre(handle));
 
@@ -1511,6 +1564,7 @@ void PlaymakersEQAudioProcessorEditor::applyFloatingExtrasVisibility(bool extras
 {
     moreButton.setVisible(usingMetricKnobs() && analyzer.getPrimarySelectedBand() >= 0);
     moreButton.getProperties().set("pmAccent", extras && usingMetricKnobs());
+    popupCloseButton.setVisible(usingMetricKnobs() && analyzer.getPrimarySelectedBand() >= 0);
     bandEnabledButton.setVisible(false);
     bandSoloButton.setVisible(false);
     removeButton.setVisible(false);
@@ -1600,6 +1654,7 @@ void PlaymakersEQAudioProcessorEditor::updateMetricModeVisibility(bool hasSelect
         c->setJustificationType(just);
 
     moreButton.setVisible(knobs && hasSelection);
+    popupCloseButton.setVisible(knobs && hasSelection);
     if (knobs)
     {
         for (auto* kn : { &freqKnob, &gainKnob, &qKnob })
@@ -1608,6 +1663,7 @@ void PlaymakersEQAudioProcessorEditor::updateMetricModeVisibility(bool hasSelect
     else
     {
         moreButton.setVisible(false);
+        popupCloseButton.setVisible(false);
         dynPanelButton.setVisible(false);
         hideSecondarySheet();
         bandEnabledButton.setButtonText("Active");
@@ -1869,8 +1925,16 @@ void PlaymakersEQAudioProcessorEditor::updateGainDynIndicator()
         gainKnob.repaint();
 }
 
+bool PlaymakersEQAudioProcessorEditor::keyPressed(const juce::KeyPress& key, juce::Component*)
+{
+    return keyPressed(key);
+}
+
 bool PlaymakersEQAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 {
+    if (isEditingMetrics())
+        return false;
+
     const auto noShift = juce::ModifierKeys::commandModifier;
     const auto withShift = juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier;
 
@@ -1885,6 +1949,16 @@ bool PlaymakersEQAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     {
         eqProcessor.undoManager.redo();
         refreshInspector();
+        return true;
+    }
+    if (key == juce::KeyPress::escapeKey)
+    {
+        juce::Component::SafePointer<PlaymakersEQAudioProcessorEditor> safeThis(this);
+        juce::MessageManager::callAsync([safeThis]
+        {
+            if (safeThis != nullptr)
+                safeThis->dismissSelectedBandUi();
+        });
         return true;
     }
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)

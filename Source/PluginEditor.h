@@ -73,7 +73,9 @@ public:
     }
 };
 
-class PlaymakersEQAudioProcessorEditor : public juce::AudioProcessorEditor, private juce::Timer
+class PlaymakersEQAudioProcessorEditor : public juce::AudioProcessorEditor,
+                                         private juce::Timer,
+                                         private juce::KeyListener
 {
 public:
     explicit PlaymakersEQAudioProcessorEditor(PlaymakersEQAudioProcessor&);
@@ -81,7 +83,9 @@ public:
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    void visibilityChanged() override;
     bool keyPressed(const juce::KeyPress& key) override;
+    bool keyPressed(const juce::KeyPress& key, juce::Component*) override;
 
 private:
     void timerCallback() override;
@@ -115,6 +119,8 @@ private:
     void applyFloatingExtrasVisibility(bool extras);
     void updateDynPanelButton();
     void updateDynSidechainButton();
+    void attachEditorKeyListeners(bool attach);
+    void dismissSelectedBandUi();
     static float parseFrequencyText(const juce::String& text);
     static float parseFloatText(const juce::String& text);
 
@@ -158,6 +164,7 @@ private:
     juce::Label qValueLabel;
     juce::TextButton metricModeButton { "Knobs" };
     juce::TextButton moreButton { "More" };
+    juce::TextButton popupCloseButton { juce::CharPointer_UTF8 ("\xc3\x97") };
     juce::TextButton dynPanelButton { "Dyn" };
     juce::TextButton bandListButton { "Bands" };
     bool hubExtrasOpen = false;
