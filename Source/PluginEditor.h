@@ -218,9 +218,9 @@ private:
     juce::TextButton dynThresholdAutoButton { "Auto" };
     juce::ToggleButton dynAutoThresholdButton { "Track" };
     juce::Label dynRangeLabel { {}, "Range" };
-    juce::Label dynRatioLabel { {}, "Ratio" };
-    juce::Label dynAttackLabel { {}, "Attack" };
-    juce::Label dynReleaseLabel { {}, "Release" };
+    juce::Label dynRatioLabel { {}, "RATIO" };
+    juce::Label dynAttackLabel { {}, "ATTACK" };
+    juce::Label dynReleaseLabel { {}, "RELEASE" };
 
     juce::Label dynSidechainLabel { {}, "Sidechain" };
     juce::Slider dynSidechainSlider;

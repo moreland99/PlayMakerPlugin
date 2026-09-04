@@ -66,7 +66,7 @@ void SpectrumAnalyzerComponent::processSpectrumBlock(
     std::array<float, AnalyzerDataProvider::fftSize / 2>& display,
     bool& initialized)
 {
-    if (!gotFft || spectrumFrozen)
+    if (!gotFft)
         return;
 
     const int n = (int) smoothed.size();
@@ -79,11 +79,13 @@ void SpectrumAnalyzerComponent::processSpectrumBlock(
     }
     else
     {
+        const float attack = spectrumFrozen ? spectrumFreezeAttack : spectrumAttack;
+        const float release = spectrumFrozen ? spectrumFreezeRelease : spectrumRelease;
         for (int i = 0; i < n; ++i)
         {
             const float target = latest[(size_t) i];
             const float cur = smoothed[(size_t) i];
-            const float coeff = target > cur ? spectrumAttack : spectrumRelease;
+            const float coeff = target > cur ? attack : release;
             smoothed[(size_t) i] = cur + (target - cur) * coeff;
         }
     }
