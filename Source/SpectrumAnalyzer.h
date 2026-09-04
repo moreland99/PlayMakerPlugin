@@ -285,8 +285,8 @@ private:
     // Frozen display: keep the held shape, but slowly admit real FFT so peaks/valleys
     // can drift. Attack is still much slower than live; release is slower still so it
     // reads as a hold, not a lagged analyzer.
-    static constexpr float spectrumFreezeAttack = 0.016f;
-    static constexpr float spectrumFreezeRelease = 0.0032f;
+    static constexpr float spectrumFreezeAttack = 0.013f;
+    static constexpr float spectrumFreezeRelease = 0.0026f;
     static constexpr float handleHitRadiusPx = 14.0f;
     static constexpr float createDragThresholdPx = 4.0f;
     static constexpr float lowZoneMaxHz = 250.0f;

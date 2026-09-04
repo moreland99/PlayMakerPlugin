@@ -115,6 +115,9 @@ private:
     void layoutSecondarySheet();
     void hideSecondarySheet();
     void setSecondarySheetOpen(bool open);
+    void setDynModeOpen(bool open);
+    void hideDynModeControls();
+    bool isFloatingPanelBusy() const;
     bool isSecondarySheetBusy() const;
     void applyFloatingExtrasVisibility(bool extras);
     void updateDynPanelButton();
@@ -166,6 +169,7 @@ private:
     juce::TextButton moreButton { "More" };
     juce::TextButton popupCloseButton { juce::CharPointer_UTF8 ("\xc3\x97") };
     juce::TextButton dynPanelButton { "Dyn" };
+    juce::TextButton dynBackButton { "Back" };
     juce::TextButton bandListButton { "Bands" };
     bool hubExtrasOpen = false;
     bool dynPanelOpen = false;
@@ -241,7 +245,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> dynAutoThresholdAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynRangeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynRatioAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynAttackAttachment;
+    struct AttackSliderBinding;
+    std::unique_ptr<AttackSliderBinding> dynAttackAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dynReleaseAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> freqKnobAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gainKnobAttachment;
