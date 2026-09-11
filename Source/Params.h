@@ -88,10 +88,34 @@ inline bool typeSupportsSlope(FilterType t)
     return t == FilterType::lowCut || t == FilterType::highCut;
 }
 
+inline bool stereoModeHasChannelTag(StereoMode m)
+{
+    return m == StereoMode::leftOnly || m == StereoMode::rightOnly
+        || m == StereoMode::midOnly || m == StereoMode::sideOnly;
+}
+
+inline juce::String stereoModeTag(StereoMode m)
+{
+    switch (m)
+    {
+        case StereoMode::leftOnly:     return "L";
+        case StereoMode::rightOnly:    return "R";
+        case StereoMode::midOnly:      return "M";
+        case StereoMode::sideOnly:     return "S";
+        case StereoMode::leftRight:
+        case StereoMode::midSide:
+        case StereoMode::numStereoModes:
+            return {};
+    }
+    return {};
+}
+
 // True-log frequency map (20 Hz–20 kHz). Shared by the Freq knob, DSP parameter,
 // analyzer node X, and the frequency grid so they never disagree.
 constexpr float minFreqHz = 20.0f;
 constexpr float maxFreqHz = 20000.0f;
+constexpr float minGainDb = -30.0f;
+constexpr float maxGainDb = 30.0f;
 
 inline float freqToNorm(float freqHz)
 {
@@ -141,6 +165,7 @@ struct BandParamPointers
 {
     std::atomic<float>* enabled = nullptr;
     std::atomic<float>* solo = nullptr;
+    std::atomic<float>* bypass = nullptr;
     std::atomic<float>* type = nullptr;
     std::atomic<float>* freq = nullptr;
     std::atomic<float>* gain = nullptr;

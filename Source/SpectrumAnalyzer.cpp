@@ -234,6 +234,7 @@ bool SpectrumAnalyzerComponent::bandAudibleInChain(int bandIndex) const
     for (int j = 0; j < Params::numBands; ++j)
     {
         if (apvts.getRawParameterValue(Params::bandParamID(j, "enabled"))->load() >= 0.5f
+            && apvts.getRawParameterValue(Params::bandParamID(j, "bypass"))->load() < 0.5f
             && apvts.getRawParameterValue(Params::bandParamID(j, "solo"))->load() >= 0.5f)
         {
             anySolo = true;
@@ -242,6 +243,9 @@ bool SpectrumAnalyzerComponent::bandAudibleInChain(int bandIndex) const
     }
 
     if (anySolo && apvts.getRawParameterValue(Params::bandParamID(bandIndex, "solo"))->load() < 0.5f)
+        return false;
+
+    if (apvts.getRawParameterValue(Params::bandParamID(bandIndex, "bypass"))->load() >= 0.5f)
         return false;
 
     return true;
@@ -588,9 +592,11 @@ bool SpectrumAnalyzerComponent::curveParamsChanged() const
         if (snap.type != type
             || snap.enabled != (apvts.getRawParameterValue(Params::bandParamID(i, "enabled"))->load() >= 0.5f)
             || snap.solo != (apvts.getRawParameterValue(Params::bandParamID(i, "solo"))->load() >= 0.5f)
+            || snap.bypass != (apvts.getRawParameterValue(Params::bandParamID(i, "bypass"))->load() >= 0.5f)
             || snap.brickwall != (apvts.getRawParameterValue(Params::bandParamID(i, "brickwall"))->load() >= 0.5f)
             || snap.dynOn != dynOn
             || snap.selected != isSelected(i)
+            || snap.stereoMode != (int) apvts.getRawParameterValue(Params::bandParamID(i, "stereoMode"))->load()
             || std::abs(snap.freq - apvts.getRawParameterValue(Params::bandParamID(i, "freq"))->load()) > 1.0e-4f
             || std::abs(snap.gain - apvts.getRawParameterValue(Params::bandParamID(i, "gain"))->load()) > 1.0e-4f
             || std::abs(snap.q - apvts.getRawParameterValue(Params::bandParamID(i, "q"))->load()) > 1.0e-4f
@@ -616,7 +622,9 @@ void SpectrumAnalyzerComponent::snapshotCurveParams()
         snap.dynOffset = smoothedDynOffsetDb[(size_t) i];
         snap.enabled = apvts.getRawParameterValue(Params::bandParamID(i, "enabled"))->load() >= 0.5f;
         snap.solo = apvts.getRawParameterValue(Params::bandParamID(i, "solo"))->load() >= 0.5f;
+        snap.bypass = apvts.getRawParameterValue(Params::bandParamID(i, "bypass"))->load() >= 0.5f;
         snap.brickwall = apvts.getRawParameterValue(Params::bandParamID(i, "brickwall"))->load() >= 0.5f;
+        snap.stereoMode = (int) apvts.getRawParameterValue(Params::bandParamID(i, "stereoMode"))->load();
         snap.dynOn = snap.enabled
             && apvts.getRawParameterValue(Params::bandParamID(i, "dynEnabled"))->load() >= 0.5f
             && Params::typeSupportsDynamics(static_cast<Params::FilterType>(snap.type));
@@ -675,16 +683,24 @@ void SpectrumAnalyzerComponent::rebuildCurveCache(juce::Rectangle<float> bounds)
         auto brickwall = apvts.getRawParameterValue(Params::bandParamID(i, "brickwall"))->load() >= 0.5f;
         const float dynRange = apvts.getRawParameterValue(Params::bandParamID(i, "dynRange"))->load();
 
-        const auto base = Theme::bandColour(i, theme.isLight());
-        const auto dynTint = Theme::dynamicsColour(base, theme.isLight());
+        const auto identity = Theme::bandColour(i, theme.isLight());
+        const auto stereoMode = static_cast<Params::StereoMode>(
+            (int) apvts.getRawParameterValue(Params::bandParamID(i, "stereoMode"))->load());
+        const auto channel = Theme::channelCurveColour(stereoMode, identity, theme.isLight());
+        const auto dynTint = Theme::dynamicsColour(identity, theme.isLight());
+        const bool bypassed = apvts.getRawParameterValue(Params::bandParamID(i, "bypass"))->load() >= 0.5f;
+        cache.bypassed = bypassed;
         const bool dimOthers = (!selectedBands.isEmpty() && !cache.selected) || !audible[(size_t) i];
-        const auto active = dynOn ? dynTint : base;
-        cache.colour = !audible[(size_t) i] ? active.withAlpha(theme.isLight() ? 0.20f : 0.14f)
+        const auto active = channel;
+        cache.colour = bypassed ? active.withAlpha(theme.isLight() ? 0.26f : 0.20f)
+                       : !audible[(size_t) i] ? active.withAlpha(theme.isLight() ? 0.20f : 0.14f)
                        : dimOthers ? active.withAlpha(theme.isLight() ? 0.38f : 0.28f)
                                  : (cache.selected ? active : active.withAlpha(theme.isLight() ? 0.88f : 0.78f));
         cache.strokeWidth = cache.selected ? (dynOn ? 2.9f : 2.5f) : (audible[(size_t) i] ? 1.35f : 0.9f);
+        if (bypassed)
+            cache.strokeWidth = juce::jmin(cache.strokeWidth, 1.1f);
         cache.fillAlpha = cache.selected ? (theme.isLight() ? (dynOn ? 0.24f : 0.18f) : (dynOn ? 0.20f : 0.14f))
-                                         : (dimOthers ? 0.03f : (theme.isLight() ? 0.09f : 0.07f));
+                                         : (dimOthers || bypassed ? 0.03f : (theme.isLight() ? 0.09f : 0.07f));
 
         FilterBand::assignStages(stages[(size_t) i], type, sampleRate, freq, gain, q, slope, brickwall);
         buildResponsePaths(cache.stroke, &cache.fill, bounds, stages[(size_t) i]);
@@ -830,15 +846,18 @@ void SpectrumAnalyzerComponent::drawBandHandles(juce::Graphics& g, juce::Rectang
         const auto pos = handlePosition(i, bounds);
         const bool selected = isSelected(i);
         const bool audible = bandAudibleInChain(i);
+        const bool bypassed = apvts.getRawParameterValue(Params::bandParamID(i, "bypass"))->load() >= 0.5f;
         const bool dimOthers = (!selectedBands.isEmpty() && !selected) || !audible;
         auto colour = Theme::bandColour(i, theme.isLight());
         const auto type = static_cast<Params::FilterType>(
             (int) apvts.getRawParameterValue(Params::bandParamID(i, "type"))->load());
+        const auto stereoMode = static_cast<Params::StereoMode>(
+            (int) apvts.getRawParameterValue(Params::bandParamID(i, "stereoMode"))->load());
         const bool dynOn = Params::typeSupportsDynamics(type)
             && apvts.getRawParameterValue(Params::bandParamID(i, "dynEnabled"))->load() >= 0.5f;
         if (dynOn)
             colour = Theme::dynamicsColour(colour, theme.isLight());
-        if (dimOthers)
+        if (dimOthers || bypassed)
             colour = colour.withAlpha(theme.isLight() ? 0.42f : 0.35f);
 
         const float radius = selected ? 5.8f : 4.2f;
@@ -850,10 +869,44 @@ void SpectrumAnalyzerComponent::drawBandHandles(juce::Graphics& g, juce::Rectang
                           (radius + 4.0f) * 2.0f, (radius + 4.0f) * 2.0f);
         }
 
-        g.setColour(colour);
-        g.fillEllipse(pos.x - radius, pos.y - radius, radius * 2.0f, radius * 2.0f);
+        if (bypassed)
+        {
+            g.setColour(colour.withAlpha(0.18f));
+            g.fillEllipse(pos.x - radius, pos.y - radius, radius * 2.0f, radius * 2.0f);
+            g.setColour(colour);
+            g.drawEllipse(pos.x - radius, pos.y - radius, radius * 2.0f, radius * 2.0f, 1.35f);
+        }
+        else
+        {
+            g.setColour(colour);
+            g.fillEllipse(pos.x - radius, pos.y - radius, radius * 2.0f, radius * 2.0f);
+        }
         g.setColour(theme.softWhite.withAlpha(selected ? 0.85f : 0.35f));
         g.drawEllipse(pos.x - radius, pos.y - radius, radius * 2.0f, radius * 2.0f, 1.15f);
+
+        const auto tag = Params::stereoModeTag(stereoMode);
+        if (tag.isNotEmpty())
+        {
+            const auto tagColour = Theme::channelTagColour(stereoMode, theme.isLight());
+            const float tagW = 14.0f;
+            const float tagH = 13.0f;
+            const float gap = 4.0f;
+            auto tagR = juce::Rectangle<float>(tagW, tagH)
+                            .withCentre({ pos.x + radius + gap + tagW * 0.5f, pos.y });
+            if (tagR.getRight() > bounds.getRight() - 1.0f)
+                tagR = tagR.withCentre({ pos.x - radius - gap - tagW * 0.5f, pos.y });
+            tagR = tagR.constrainedWithin(bounds.reduced(1.0f));
+
+            const float fillA = (dimOthers || bypassed) ? 0.10f : (selected ? 0.22f : 0.16f);
+            const float textA = (dimOthers || bypassed) ? 0.55f : (selected ? 0.95f : 0.82f);
+            g.setColour(tagColour.withAlpha(fillA));
+            g.fillRoundedRectangle(tagR, 3.5f);
+            g.setColour(tagColour.withAlpha(textA * 0.55f));
+            g.drawRoundedRectangle(tagR.reduced(0.4f), 3.5f, 0.9f);
+            g.setFont(Brand::uiFont(10.0f, true));
+            g.setColour(tagColour.withAlpha(textA));
+            g.drawText(tag, tagR, juce::Justification::centred, false);
+        }
     }
 }
 
@@ -985,6 +1038,12 @@ void SpectrumAnalyzerComponent::setBandEnabled(int bandIndex, bool enabled)
         p->setValueNotifyingHost(enabled ? 1.0f : 0.0f);
 }
 
+void SpectrumAnalyzerComponent::setBandBypass(int bandIndex, bool bypassed)
+{
+    if (auto* p = apvts.getParameter(Params::bandParamID(bandIndex, "bypass")))
+        p->setValueNotifyingHost(bypassed ? 1.0f : 0.0f);
+}
+
 void SpectrumAnalyzerComponent::setBandType(int bandIndex, Params::FilterType type)
 {
     if (auto* p = dynamic_cast<juce::AudioParameterChoice*>(
@@ -1003,7 +1062,12 @@ void SpectrumAnalyzerComponent::setBandGain(int bandIndex, float gainDb)
 {
     if (auto* p = dynamic_cast<juce::AudioParameterFloat*>(
             apvts.getParameter(Params::bandParamID(bandIndex, "gain"))))
-        p->setValueNotifyingHost(p->convertTo0to1(juce::jlimit(curveMinDb, curveMaxDb, gainDb)));
+    {
+        const auto range = p->getNormalisableRange();
+        const float lo = juce::jmax(curveMinDb, range.start);
+        const float hi = juce::jmin(curveMaxDb, range.end);
+        p->setValueNotifyingHost(p->convertTo0to1(juce::jlimit(lo, hi, gainDb)));
+    }
 }
 
 void SpectrumAnalyzerComponent::setBandQ(int bandIndex, float q)
@@ -1011,6 +1075,113 @@ void SpectrumAnalyzerComponent::setBandQ(int bandIndex, float q)
     if (auto* p = dynamic_cast<juce::AudioParameterFloat*>(
             apvts.getParameter(Params::bandParamID(bandIndex, "q"))))
         p->setValueNotifyingHost(p->convertTo0to1(juce::jlimit(0.1f, 18.0f, q)));
+}
+
+void SpectrumAnalyzerComponent::setBandStereoMode(int bandIndex, Params::StereoMode mode)
+{
+    if (auto* p = dynamic_cast<juce::AudioParameterChoice*>(
+            apvts.getParameter(Params::bandParamID(bandIndex, "stereoMode"))))
+        p->setValueNotifyingHost(p->convertTo0to1((float) static_cast<int>(mode)));
+}
+
+void SpectrumAnalyzerComponent::copyBandParameters(int sourceIndex, int destIndex)
+{
+    static constexpr const char* suffixes[] = {
+        "type", "freq", "gain", "q", "balance", "slope", "brickwall",
+        "dynEnabled", "dynThreshold", "dynAutoThreshold", "dynRange", "dynRatio",
+        "dynAttack", "dynRelease", "dynRelativeBlend", "dynSidechainBlend", "bypass"
+    };
+
+    for (auto* suffix : suffixes)
+    {
+        auto* src = apvts.getParameter(Params::bandParamID(sourceIndex, suffix));
+        auto* dst = apvts.getParameter(Params::bandParamID(destIndex, suffix));
+        if (src != nullptr && dst != nullptr)
+            dst->setValueNotifyingHost(src->getValue());
+    }
+}
+
+void SpectrumAnalyzerComponent::cycleBandFilterType(int bandIndex)
+{
+    auto* p = dynamic_cast<juce::AudioParameterChoice*>(
+        apvts.getParameter(Params::bandParamID(bandIndex, "type")));
+    if (p == nullptr)
+        return;
+
+    const int cur = p->getIndex();
+    const int next = (cur + 1) % (int) Params::FilterType::numFilterTypes;
+    beginBandGesture(bandIndex, { "type" });
+    p->setValueNotifyingHost(p->convertTo0to1((float) next));
+    endBandGesture(bandIndex, { "type" });
+}
+
+void SpectrumAnalyzerComponent::toggleBandBypass(int bandIndex)
+{
+    const bool cur = apvts.getRawParameterValue(Params::bandParamID(bandIndex, "bypass"))->load() >= 0.5f;
+    beginBandGesture(bandIndex, { "bypass" });
+    setBandBypass(bandIndex, !cur);
+    endBandGesture(bandIndex, { "bypass" });
+    curveCacheValid = false;
+    repaint();
+}
+
+void SpectrumAnalyzerComponent::resetBandGain(int bandIndex)
+{
+    beginBandGesture(bandIndex, { "gain" });
+    setBandGain(bandIndex, 0.0f);
+    endBandGesture(bandIndex, { "gain" });
+    if (onBandMoved)
+        onBandMoved();
+    repaint();
+}
+
+void SpectrumAnalyzerComponent::selectTwo(int firstIndex, int secondIndex)
+{
+    selectedBands.clear();
+    if (firstIndex >= 0)
+        selectedBands.addRange({ firstIndex, firstIndex + 1 });
+    if (secondIndex >= 0 && secondIndex != firstIndex)
+        selectedBands.addRange({ secondIndex, secondIndex + 1 });
+    primaryBand = firstIndex;
+    notifySelectionChanged();
+    repaint();
+}
+
+bool SpectrumAnalyzerComponent::hasFreeBandSlot() const
+{
+    return findFirstDisabledBand() >= 0;
+}
+
+bool SpectrumAnalyzerComponent::splitStereoBand(int bandIndex, bool midSidePair)
+{
+    if (bandIndex < 0 || bandIndex >= Params::numBands)
+        return false;
+
+    if (apvts.getRawParameterValue(Params::bandParamID(bandIndex, "enabled"))->load() < 0.5f)
+        return false;
+
+    const auto mode = static_cast<Params::StereoMode>(
+        (int) apvts.getRawParameterValue(Params::bandParamID(bandIndex, "stereoMode"))->load());
+    if (mode != Params::StereoMode::leftRight)
+        return false;
+
+    const int dest = findFirstDisabledBand();
+    if (dest < 0)
+        return false;
+
+    if (apvts.undoManager != nullptr)
+        apvts.undoManager->beginNewTransaction("Split Band");
+
+    const auto modeA = midSidePair ? Params::StereoMode::midOnly : Params::StereoMode::leftOnly;
+    const auto modeB = midSidePair ? Params::StereoMode::sideOnly : Params::StereoMode::rightOnly;
+
+    copyBandParameters(bandIndex, dest);
+    setBandStereoMode(bandIndex, modeA);
+    setBandStereoMode(dest, modeB);
+    setBandEnabled(dest, true);
+    selectTwo(bandIndex, dest);
+    curveCacheValid = false;
+    return true;
 }
 
 void SpectrumAnalyzerComponent::beginBandGesture(int bandIndex)
@@ -1107,14 +1278,18 @@ void SpectrumAnalyzerComponent::commitCreateAt(float freqHz, float gainDb)
     if (slot < 0)
         return;
 
-    const auto type = defaultTypeForFrequency(freqHz);
-    beginBandGesture(slot);
+    const auto type = createPreviewActive ? createPreviewType : Params::FilterType::bell;
+    beginBandGesture(slot, { "freq", "gain", "q", "type", "enabled", "stereoMode", "bypass", "solo" });
     setBandType(slot, type);
     setBandFreq(slot, freqHz);
     setBandGain(slot, gainDb);
     setBandQ(slot, defaultQ);
+    setBandStereoMode(slot, Params::StereoMode::leftRight);
+    setBandBypass(slot, false);
+    if (auto* solo = apvts.getParameter(Params::bandParamID(slot, "solo")))
+        solo->setValueNotifyingHost(0.0f);
     setBandEnabled(slot, true);
-    endBandGesture(slot);
+    endBandGesture(slot, { "freq", "gain", "q", "type", "enabled", "stereoMode", "bypass", "solo" });
     selectOnly(slot);
 }
 
@@ -1136,29 +1311,30 @@ void SpectrumAnalyzerComponent::mouseDown(const juce::MouseEvent& e)
         return;
 
     const int hit = hitTestBand(pos, bounds);
+    const bool cmd = e.mods.isCommandDown() || e.mods.isCtrlDown();
+    const bool alt = e.mods.isAltDown();
+    const bool shift = e.mods.isShiftDown();
 
-    // Modifier-click deletes the hit band (Alt/Option on macOS).
-    if (hit >= 0 && e.mods.isAltDown())
+    if (hit >= 0 && cmd && alt)
     {
-        deleteBand(hit);
+        cycleBandFilterType(hit);
+        if (!isSelected(hit))
+            selectOnly(hit);
+        gesture = Gesture::none;
+        return;
+    }
+
+    if (hit >= 0 && alt)
+    {
+        toggleBandBypass(hit);
+        if (!isSelected(hit))
+            selectOnly(hit);
         gesture = Gesture::none;
         return;
     }
 
     if (hit >= 0)
     {
-        if (e.mods.isShiftDown())
-        {
-            toggleSelection(hit);
-            gesture = Gesture::none;
-            return;
-        }
-
-        if (!isSelected(hit))
-            selectOnly(hit);
-
-        primaryBand = hit;
-
         for (int i = 0; i < Params::numBands; ++i)
         {
             dragStartFreqs[(size_t) i] = apvts.getRawParameterValue(Params::bandParamID(i, "freq"))->load();
@@ -1167,15 +1343,18 @@ void SpectrumAnalyzerComponent::mouseDown(const juce::MouseEvent& e)
         }
         dragStartFreq = dragStartFreqs[(size_t) hit];
         dragStartGain = dragStartGains[(size_t) hit];
+        primaryBand = hit;
 
-        if (e.mods.isCommandDown() || e.mods.isCtrlDown())
+        if (cmd || shift)
         {
-            gesture = Gesture::dragBandQ;
-            for (int i = 0; i < Params::numBands; ++i)
-                if (isSelected(i))
-                    beginBandGesture(i, { "q" });
+            gesture = Gesture::handleClickCandidate;
+            candidateWantsQ = cmd;
+            candidateWantsToggle = shift && !cmd;
             return;
         }
+
+        if (!isSelected(hit))
+            selectOnly(hit);
 
         gesture = Gesture::dragBand;
         for (int i = 0; i < Params::numBands; ++i)
@@ -1204,6 +1383,34 @@ void SpectrumAnalyzerComponent::mouseDrag(const juce::MouseEvent& e)
 {
     const auto bounds = layoutRail().graph;
     gestureCurrentPos = e.position;
+
+    if (gesture == Gesture::handleClickCandidate && primaryBand >= 0)
+    {
+        if (e.position.getDistanceFrom(gestureStartPos) < createDragThresholdPx)
+            return;
+
+        if (candidateWantsQ)
+        {
+            if (!isSelected(primaryBand))
+                selectOnly(primaryBand);
+            gesture = Gesture::dragBandQ;
+            for (int i = 0; i < Params::numBands; ++i)
+                if (isSelected(i))
+                    beginBandGesture(i, { "q" });
+        }
+        else
+        {
+            if (!isSelected(primaryBand))
+            {
+                selectedBands.addRange({ primaryBand, primaryBand + 1 });
+                notifySelectionChanged();
+            }
+            gesture = Gesture::dragBand;
+            for (int i = 0; i < Params::numBands; ++i)
+                if (isSelected(i))
+                    beginBandGesture(i, { "freq", "gain" });
+        }
+    }
 
     if (gesture == Gesture::dragBand && primaryBand >= 0)
     {
@@ -1284,6 +1491,19 @@ void SpectrumAnalyzerComponent::mouseUp(const juce::MouseEvent& e)
             if (isSelected(i))
                 endBandGesture(i, { "q" });
     }
+    else if (gesture == Gesture::handleClickCandidate && primaryBand >= 0)
+    {
+        if (candidateWantsQ)
+        {
+            if (!isSelected(primaryBand))
+                selectOnly(primaryBand);
+            resetBandGain(primaryBand);
+        }
+        else if (candidateWantsToggle)
+            toggleSelection(primaryBand);
+        else if (!isSelected(primaryBand))
+            selectOnly(primaryBand);
+    }
     else if (gesture == Gesture::createDrag && createPreviewActive)
     {
         commitCreateAt(createPreviewFreq, createPreviewGain);
@@ -1301,18 +1521,19 @@ void SpectrumAnalyzerComponent::mouseUp(const juce::MouseEvent& e)
 
 void SpectrumAnalyzerComponent::mouseDoubleClick(const juce::MouseEvent& e)
 {
-    if (e.mods.isAltDown())
+    if (e.mods.isAltDown() || e.mods.isCommandDown() || e.mods.isCtrlDown())
         return;
 
     const auto bounds = layoutRail().graph;
-    if (!bounds.contains(e.position))
+    if (!bounds.contains(e.position) || hitTestBand(e.position, bounds) >= 0)
         return;
 
     const auto freq = xToFreq(e.position.x - bounds.getX(), bounds.getWidth());
     const auto gain = yToDb(e.position.y - bounds.getY(), bounds.getHeight(), curveMinDb, curveMaxDb);
+    createPreviewActive = false;
+    createPreviewType = Params::FilterType::bell;
     commitCreateAt(freq, gain);
     gesture = Gesture::none;
-    createPreviewActive = false;
 }
 
 void SpectrumAnalyzerComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)

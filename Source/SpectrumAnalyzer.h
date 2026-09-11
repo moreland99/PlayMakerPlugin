@@ -104,6 +104,8 @@ public:
     void selectOnly(int bandIndex);
     void toggleSelection(int bandIndex);
     bool isSelected(int bandIndex) const;
+    bool hasFreeBandSlot() const;
+    bool splitStereoBand(int bandIndex, bool midSidePair);
     std::function<void()> onSelectionChanged;
     std::function<void()> onBandMoved;
 
@@ -127,7 +129,8 @@ private:
         dragBand,
         dragBandQ,
         createDrag,
-        marquee
+        marquee,
+        handleClickCandidate
     };
 
     void timerCallback() override;
@@ -182,10 +185,17 @@ private:
     static Params::FilterType defaultTypeForFrequency(float freqHz);
 
     void setBandEnabled(int bandIndex, bool enabled);
+    void setBandBypass(int bandIndex, bool bypassed);
     void setBandType(int bandIndex, Params::FilterType type);
     void setBandFreq(int bandIndex, float freqHz);
     void setBandGain(int bandIndex, float gainDb);
     void setBandQ(int bandIndex, float q);
+    void setBandStereoMode(int bandIndex, Params::StereoMode mode);
+    void copyBandParameters(int sourceIndex, int destIndex);
+    void cycleBandFilterType(int bandIndex);
+    void toggleBandBypass(int bandIndex);
+    void resetBandGain(int bandIndex);
+    void selectTwo(int firstIndex, int secondIndex);
     void beginBandGesture(int bandIndex);
     void beginBandGesture(int bandIndex, std::initializer_list<const char*> suffixes);
     void endBandGesture(int bandIndex);
@@ -222,6 +232,8 @@ private:
     int primaryBand = -1;
     juce::Point<float> gestureStartPos;
     juce::Point<float> gestureCurrentPos;
+    bool candidateWantsQ = false;
+    bool candidateWantsToggle = false;
     float dragStartFreq = 1000.0f;
     float dragStartGain = 0.0f;
     std::array<float, Params::numBands> dragStartFreqs {};
@@ -247,9 +259,11 @@ private:
         float dynOffset = 0.0f;
         bool enabled = false;
         bool solo = false;
+        bool bypass = false;
         bool brickwall = false;
         bool dynOn = false;
         bool selected = false;
+        int stereoMode = 0;
     };
 
     struct BandCurveCache
@@ -263,6 +277,7 @@ private:
         float fillAlpha = 0.0f;
         bool enabled = false;
         bool selected = false;
+        bool bypassed = false;
         bool hasDynFill = false;
     };
 

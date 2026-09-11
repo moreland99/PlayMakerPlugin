@@ -16,6 +16,7 @@ PlaymakersEQAudioProcessor::PlaymakersEQAudioProcessor()
         auto& p = paramPointers[(size_t) i];
         p.enabled = apvts.getRawParameterValue(Params::bandParamID(i, "enabled"));
         p.solo = apvts.getRawParameterValue(Params::bandParamID(i, "solo"));
+        p.bypass = apvts.getRawParameterValue(Params::bandParamID(i, "bypass"));
         p.type = apvts.getRawParameterValue(Params::bandParamID(i, "type"));
         p.freq = apvts.getRawParameterValue(Params::bandParamID(i, "freq"));
         p.gain = apvts.getRawParameterValue(Params::bandParamID(i, "gain"));
@@ -126,7 +127,7 @@ int PlaymakersEQAudioProcessor::firTapsForMode(Params::PhaseMode mode, int quali
 bool PlaymakersEQAudioProcessor::anyBandSoloActive() const
 {
     for (const auto& p : paramPointers)
-        if (p.enabled->load() >= 0.5f && p.solo->load() >= 0.5f)
+        if (p.enabled->load() >= 0.5f && p.bypass->load() < 0.5f && p.solo->load() >= 0.5f)
             return true;
     return false;
 }
@@ -135,6 +136,8 @@ bool PlaymakersEQAudioProcessor::bandContributesToAudio(int bandIndex) const
 {
     const auto& p = paramPointers[(size_t) bandIndex];
     if (p.enabled->load() < 0.5f)
+        return false;
+    if (p.bypass->load() >= 0.5f)
         return false;
     if (anyBandSoloActive() && p.solo->load() < 0.5f)
         return false;
@@ -171,7 +174,7 @@ juce::uint64 PlaymakersEQAudioProcessor::computeParamsHash() const
 
     juce::uint64 h = 14695981039346656037ULL;
     for (const auto& p : paramPointers)
-        for (auto* v : { p.enabled, p.solo, p.type, p.freq, p.gain, p.q, p.stereoMode, p.balance,
+        for (auto* v : { p.enabled, p.solo, p.bypass, p.type, p.freq, p.gain, p.q, p.stereoMode, p.balance,
                           p.slope, p.brickwall, p.dynEnabled })
             h = fold(h, v->load());
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <array>
 #include "PluginProcessor.h"
 #include "SpectrumAnalyzer.h"
 #include "BandList.h"
@@ -73,6 +74,64 @@ public:
     }
 };
 
+class PlaymakersSlider : public juce::Slider
+{
+public:
+    int baseSensitivity = 180;
+    int fineSensitivity = 720;
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        const bool cmd = e.mods.isCommandDown() || e.mods.isCtrlDown();
+        if (cmd && !e.mods.isAltDown() && e.mods.isLeftButtonDown())
+        {
+            if (isDoubleClickReturnEnabled())
+                setValue(getDoubleClickReturnValue(), juce::sendNotificationSync);
+            return;
+        }
+
+        setMouseDragSensitivity(e.mods.isShiftDown() ? fineSensitivity : baseSensitivity);
+        juce::Slider::mouseDown(e);
+    }
+
+    void mouseUp(const juce::MouseEvent& e) override
+    {
+        juce::Slider::mouseUp(e);
+        setMouseDragSensitivity(baseSensitivity);
+    }
+};
+
+class FilterShapeButton : public juce::Button
+{
+public:
+    Params::FilterType type = Params::FilterType::bell;
+    std::function<juce::Colour()> accentColour;
+
+    FilterShapeButton() : juce::Button({})
+    {
+        setClickingTogglesState(true);
+    }
+
+    void paintButton(juce::Graphics& g, bool highlighted, bool down) override;
+};
+
+class FilterShapePanel : public juce::Component
+{
+public:
+    std::function<void(int)> onTypeChosen;
+    std::function<void(bool)> onSplit;
+    std::function<juce::Colour()> accentColour;
+    std::array<FilterShapeButton, (size_t) Params::FilterType::numFilterTypes> typeButtons;
+    juce::TextButton splitLR { "Split L / R" };
+    juce::TextButton splitMS { "Split M / S" };
+
+    FilterShapePanel();
+    void paint(juce::Graphics& g) override;
+    void resized() override;
+    void setSelectedType(int typeIndex);
+    void setSplitAvailable(bool stereoSource, bool hasFreeSlot);
+};
+
 class PlaymakersEQAudioProcessorEditor : public juce::AudioProcessorEditor,
                                          private juce::Timer,
                                          private juce::KeyListener
@@ -115,6 +174,9 @@ private:
     void layoutSecondarySheet();
     void hideSecondarySheet();
     void setSecondarySheetOpen(bool open);
+    void layoutFilterShapeSheet();
+    void hideFilterShapeSheet();
+    void setFilterShapeSheetOpen(bool open);
     void setDynModeOpen(bool open);
     void hideDynModeControls();
     bool isFloatingPanelBusy() const;
@@ -134,6 +196,7 @@ private:
     BandListComponent bandList;
     FloatingBandPanel floatingBandPanel;
     FloatingBandPanel secondarySheet;
+    FilterShapePanel filterShapeSheet;
     BandNodeHud bandNodeHud;
 
     juce::Rectangle<int> brandLockupBounds;
@@ -168,17 +231,19 @@ private:
     juce::TextButton metricModeButton { "Knobs" };
     juce::TextButton moreButton { "More" };
     juce::TextButton popupCloseButton { juce::CharPointer_UTF8 ("\xc3\x97") };
+    juce::TextButton filterGridButton;
     juce::TextButton dynPanelButton { "Dyn" };
     juce::TextButton dynBackButton { "Back" };
     juce::TextButton bandListButton { "Bands" };
     bool hubExtrasOpen = false;
+    bool filterMenuOpen = false;
     bool dynPanelOpen = false;
     bool bandListOpen = false;
-    juce::Slider freqKnob;
-    juce::Slider gainKnob;
-    juce::Slider qKnob;
+    PlaymakersSlider freqKnob;
+    PlaymakersSlider gainKnob;
+    PlaymakersSlider qKnob;
     juce::Label freqRangeHint { {}, "20 Hz – 20 kHz" };
-    juce::Label gainRangeHint { {}, "−24 – +24" };
+    juce::Label gainRangeHint { {}, "−30 – +30" };
     juce::Label qRangeHint { {}, "0.1 – 18" };
     juce::Rectangle<int> knobStripBounds;
     juce::Point<int> floatingHandlePos;
@@ -215,9 +280,9 @@ private:
     juce::ToggleButton dynEnableButton { "On" };
     juce::Slider dynThresholdSlider;
     juce::Slider dynRangeSlider;
-    juce::Slider dynRatioSlider;
-    juce::Slider dynAttackSlider;
-    juce::Slider dynReleaseSlider;
+    PlaymakersSlider dynRatioSlider;
+    PlaymakersSlider dynAttackSlider;
+    PlaymakersSlider dynReleaseSlider;
     juce::Label dynThresholdLabel { {}, "Thresh" };
     juce::TextButton dynThresholdAutoButton { "Auto" };
     juce::ToggleButton dynAutoThresholdButton { "Track" };
@@ -230,8 +295,7 @@ private:
     juce::Slider dynSidechainSlider;
     juce::ToggleButton dynSidechainButton { "Off" };
     juce::Label emptyHint { {},
-        "Click a band on the graph or pick one from the list.\n"
-        "Double-click empty space to add a band · Scroll or ⌘-drag a handle for Q · Option-click a band to remove" };
+        "Double-click empty space to add a Bell · S solo · X delete · Option-click bypass · ⌘-click reset · ⌘-drag Q" };
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bandEnabledAttachment;

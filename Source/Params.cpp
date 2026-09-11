@@ -9,7 +9,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 
     juce::NormalisableRange<float> freqRange = frequencyRange();
 
-    juce::NormalisableRange<float> gainRange(-24.0f, 24.0f, 0.01f);
+    juce::NormalisableRange<float> gainRange(minGainDb, maxGainDb, 0.01f);
     juce::NormalisableRange<float> qRange(0.1f, 18.0f, 0.001f);
     qRange.setSkewForCentre(0.707f);
 
@@ -23,6 +23,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         params.push_back(std::make_unique<juce::AudioParameterBool>(
             juce::ParameterID(bandParamID(i, "solo"), 1),
             "Band " + juce::String(i + 1) + " Solo",
+            false));
+
+        params.push_back(std::make_unique<juce::AudioParameterBool>(
+            juce::ParameterID(bandParamID(i, "bypass"), 1),
+            "Band " + juce::String(i + 1) + " Bypass",
             false));
 
         params.push_back(std::make_unique<juce::AudioParameterChoice>(

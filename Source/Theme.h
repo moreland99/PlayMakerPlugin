@@ -85,6 +85,55 @@ struct Theme
         return forLightCanvas ? c.darker(0.28f) : c.darker(0.18f).brighter(0.02f);
     }
 
+    // Response-curve colour for channel routing. Stereo/linked modes keep the
+    // band identity colour; L/R/M/S get a distinct channel treatment, then a
+    // light blend back toward the band colour so multiple bands stay readable.
+    static juce::Colour channelCurveColour(Params::StereoMode mode, juce::Colour bandIdentity,
+                                           bool forLightCanvas = false)
+    {
+        juce::Colour channel;
+        switch (mode)
+        {
+            case Params::StereoMode::leftOnly:
+                channel = forLightCanvas ? juce::Colour(0xff2f3238) : juce::Colour(0xfff3f5f7);
+                break;
+            case Params::StereoMode::rightOnly:
+                channel = forLightCanvas ? juce::Colour(0xffc43b3b) : juce::Colour(0xffe24b4b);
+                break;
+            case Params::StereoMode::midOnly:
+                channel = forLightCanvas ? juce::Colour(0xff2a9a55) : juce::Colour(0xff3dba6a);
+                break;
+            case Params::StereoMode::sideOnly:
+                channel = forLightCanvas ? juce::Colour(0xff1f9bb8) : juce::Colour(0xff3ec6e0);
+                break;
+            case Params::StereoMode::leftRight:
+            case Params::StereoMode::midSide:
+            case Params::StereoMode::numStereoModes:
+                return bandIdentity;
+        }
+        return channel.interpolatedWith(bandIdentity, 0.30f);
+    }
+
+    static juce::Colour channelTagColour(Params::StereoMode mode, bool forLightCanvas = false)
+    {
+        switch (mode)
+        {
+            case Params::StereoMode::leftOnly:
+                return forLightCanvas ? juce::Colour(0xff2f3238) : juce::Colour(0xfff4f6f8);
+            case Params::StereoMode::rightOnly:
+                return forLightCanvas ? juce::Colour(0xffc43b3b) : juce::Colour(0xffe24b4b);
+            case Params::StereoMode::midOnly:
+                return forLightCanvas ? juce::Colour(0xff2a9a55) : juce::Colour(0xff3dba6a);
+            case Params::StereoMode::sideOnly:
+                return forLightCanvas ? juce::Colour(0xff1f9bb8) : juce::Colour(0xff3ec6e0);
+            case Params::StereoMode::leftRight:
+            case Params::StereoMode::midSide:
+            case Params::StereoMode::numStereoModes:
+                break;
+        }
+        return {};
+    }
+
     static Theme dark() { return {}; }
 
     static Theme light()

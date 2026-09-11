@@ -33,6 +33,7 @@ private:
         float q = 0.707f;
         bool solo = false;
         bool dynOn = false;
+        bool bypass = false;
 
         bool operator==(const Row& other) const
         {
@@ -40,6 +41,7 @@ private:
                 && typeIndex == other.typeIndex
                 && solo == other.solo
                 && dynOn == other.dynOn
+                && bypass == other.bypass
                 && std::abs(freq - other.freq) < 0.001f
                 && std::abs(gain - other.gain) < 0.01f
                 && std::abs(q - other.q) < 0.001f;

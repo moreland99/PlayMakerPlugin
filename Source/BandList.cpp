@@ -38,6 +38,7 @@ void BandListComponent::refresh()
         row.gain = apvts.getRawParameterValue(Params::bandParamID(i, "gain"))->load();
         row.q = apvts.getRawParameterValue(Params::bandParamID(i, "q"))->load();
         row.solo = apvts.getRawParameterValue(Params::bandParamID(i, "solo"))->load() >= 0.5f;
+        row.bypass = apvts.getRawParameterValue(Params::bandParamID(i, "bypass"))->load() >= 0.5f;
         const auto type = static_cast<Params::FilterType>(row.typeIndex);
         row.dynOn = Params::typeSupportsDynamics(type)
             && apvts.getRawParameterValue(Params::bandParamID(i, "dynEnabled"))->load() >= 0.5f;
@@ -134,6 +135,7 @@ void BandListComponent::paintListBoxItem(int rowNumber, juce::Graphics& g,
     const bool selected = selectedBands.contains(row.bandIndex);
     const auto accent = Theme::bandColour(row.bandIndex, theme.isLight());
     auto area = juce::Rectangle<int>(0, 0, width, height);
+    const float dim = row.bypass ? 0.45f : 1.0f;
 
     if (primary)
         g.setColour(accent.withAlpha(theme.isLight() ? 0.16f : 0.14f));
@@ -145,11 +147,11 @@ void BandListComponent::paintListBoxItem(int rowNumber, juce::Graphics& g,
         g.setColour(juce::Colours::transparentBlack);
     g.fillRect(area);
 
-    g.setColour(accent);
+    g.setColour(accent.withAlpha(dim));
     g.fillRect(0, 3, 3, height - 6);
 
     auto cols = area.reduced(8, 0);
-    const auto text = primary ? theme.ink : theme.ink.withAlpha(0.82f);
+    const auto text = (primary ? theme.ink : theme.ink.withAlpha(0.82f)).withMultipliedAlpha(dim);
 
     g.setColour(text);
     g.setFont(Brand::uiFont(10.5f, primary));
